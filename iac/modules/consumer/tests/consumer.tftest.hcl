@@ -194,6 +194,33 @@ run "mapping_reports_batch_item_failures" {
   }
 }
 
+run "mapping_is_uncapped_by_default" {
+  command = plan
+  assert {
+    condition     = length(aws_lambda_event_source_mapping.this[0].scaling_config) == 0
+    error_message = "with maximum_concurrency null the mapping must carry no scaling_config"
+  }
+}
+
+run "mapping_concurrency_follows_maximum_concurrency" {
+  command = plan
+  variables {
+    maximum_concurrency = 5
+  }
+  assert {
+    condition     = one(aws_lambda_event_source_mapping.this[0].scaling_config).maximum_concurrency == 5
+    error_message = "maximum_concurrency must reach the mapping's scaling_config"
+  }
+}
+
+run "mapping_concurrency_below_two_is_refused" {
+  command = plan
+  variables {
+    maximum_concurrency = 1
+  }
+  expect_failures = [var.maximum_concurrency]
+}
+
 run "kill_switch_disables_the_mapping_only" {
   command = plan
   variables {
