@@ -27,8 +27,8 @@ output "delivery_dlq_url" {
 }
 
 output "mapping_uuid" {
-  description = "The `<id>` in docs/kill-switch-runbook.md's disable and re-enable commands."
-  value       = aws_lambda_event_source_mapping.this.uuid
+  description = "The `<id>` in docs/kill-switch-runbook.md's disable and re-enable commands. Null while `create_event_source_mapping` is false."
+  value       = one(aws_lambda_event_source_mapping.this[*].uuid)
 }
 
 output "inbox_table_name" {
@@ -45,10 +45,13 @@ output "consumer_policy_json" {
 }
 
 output "alarm_names" {
-  value = [
-    aws_cloudwatch_metric_alarm.dlq_visible.alarm_name,
-    aws_cloudwatch_metric_alarm.delivery_dlq_visible.alarm_name,
-    aws_cloudwatch_metric_alarm.queue_age.alarm_name,
-    aws_cloudwatch_metric_alarm.lambda_errors.alarm_name,
-  ]
+  description = "Four alarms; three while `create_event_source_mapping` is false (no Lambda Errors alarm)."
+  value = concat(
+    [
+      aws_cloudwatch_metric_alarm.dlq_visible.alarm_name,
+      aws_cloudwatch_metric_alarm.delivery_dlq_visible.alarm_name,
+      aws_cloudwatch_metric_alarm.queue_age.alarm_name,
+    ],
+    aws_cloudwatch_metric_alarm.lambda_errors[*].alarm_name,
+  )
 }

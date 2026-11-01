@@ -107,13 +107,38 @@ resource "aws_sqs_queue_policy" "this" {
 # `enabled` is the kill switch (docs/kill-switch-runbook.md). Setting it false in the
 # caller's IaC keeps a thrown switch off across later applies; messages wait on the
 # queue for up to `retention_seconds`.
+#
+# `create_event_source_mapping = false` is for a caller that deploys queue-first: it
+# applies this module before the function exists, reads `queue_arn`, deploys the
+# function, then applies again with the flag true. Until then there is no mapping and
+# no Lambda Errors alarm (which would name an empty function).
 resource "aws_lambda_event_source_mapping" "this" {
+  count                              = var.create_event_source_mapping ? 1 : 0
   event_source_arn                   = aws_sqs_queue.this.arn
   function_name                      = var.function_arn
   enabled                            = var.enabled
   batch_size                         = var.batch_size
   maximum_batching_window_in_seconds = var.maximum_batching_window_in_seconds
   function_response_types            = ["ReportBatchItemFailures"]
+
+  lifecycle {
+    precondition {
+      condition     = length(trimspace(var.function_arn)) > 0
+      error_message = "function_arn must name the consumer function when create_event_source_mapping is true."
+    }
+  }
+}
+
+# Both resources were unconditional before `create_event_source_mapping` existed; a
+# stack applied then keeps its mapping and alarm instead of replacing them.
+moved {
+  from = aws_lambda_event_source_mapping.this
+  to   = aws_lambda_event_source_mapping.this[0]
+}
+
+moved {
+  from = aws_cloudwatch_metric_alarm.lambda_errors
+  to   = aws_cloudwatch_metric_alarm.lambda_errors[0]
 }
 
 resource "aws_cloudwatch_metric_alarm" "dlq_visible" {
@@ -162,6 +187,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_age" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  count               = var.create_event_source_mapping ? 1 : 0
   alarm_name          = "${var.name}-errors"
   alarm_description   = "The function draining ${var.name} raised an error."
   namespace           = "AWS/Lambda"

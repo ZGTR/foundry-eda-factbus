@@ -36,8 +36,19 @@ variable "event_types" {
 }
 
 variable "function_arn" {
-  description = "The Lambda function that drains the queue (ARN or name)."
+  description = "The Lambda function that drains the queue (ARN or name). May be empty only while `create_event_source_mapping` is false."
   type        = string
+}
+
+variable "create_event_source_mapping" {
+  description = <<-EOT
+    Create the event source mapping and the Lambda Errors alarm. False for a queue-first
+    deploy: the rule, queue, DLQs, their alarms and the inbox exist and `queue_arn` is an
+    output, but nothing invokes a function yet, so `function_arn` may be empty. Apply
+    again with true once the function exists. Not the kill switch: that is `enabled`.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "enabled" {
