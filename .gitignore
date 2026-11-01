@@ -11,3 +11,4 @@ dist/
 *.tfstate*
 .venv-matrix-*/
 examples/hello/.build/
+examples/product/.build/
