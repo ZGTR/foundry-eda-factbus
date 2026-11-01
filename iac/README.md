@@ -54,6 +54,10 @@ single table holds the inbox, the applied versions and `once` claims.
 - `role_name` and `sweeper_function_arn` must be known at plan time, because they
   decide `count`. A role created with `name_prefix` in the same apply is not, so attach
   `consumer_policy_json` / `policy_json` yourself in that case.
+- Queue-first deploys: `create_event_source_mapping = false` creates the rule, queue,
+  DLQs, their alarms and the inbox, and outputs `queue_arn`, with no event source mapping
+  and no Lambda Errors alarm, so `function_arn` may be empty. Apply again with `true` once
+  the function exists. `enabled` stays the kill switch on an existing mapping.
 - One bus per consumer module. A consumer of two buses instantiates the module twice,
   once per bus, with distinct `name`s.
 - A consumer's two DLQs mean different things. `<name>-delivery-dlq` holds events
