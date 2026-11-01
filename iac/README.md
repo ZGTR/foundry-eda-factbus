@@ -58,6 +58,10 @@ single table holds the inbox, the applied versions and `once` claims.
   DLQs, their alarms and the inbox, and outputs `queue_arn`, with no event source mapping
   and no Lambda Errors alarm, so `function_arn` may be empty. Apply again with `true` once
   the function exists. `enabled` stays the kill switch on an existing mapping.
+- The mapping is uncapped unless `maximum_concurrency` is set (2-1000). A function with
+  reserved concurrency should set it at or below that reservation: otherwise the poller
+  invokes past it, throttled batches return to the queue, and each return counts toward
+  `max_receive_count`.
 - One bus per consumer module. A consumer of two buses instantiates the module twice,
   once per bus, with distinct `name`s.
 - A consumer's two DLQs mean different things. `<name>-delivery-dlq` holds events

@@ -73,6 +73,16 @@ variable "maximum_batching_window_in_seconds" {
   default     = 0
 }
 
+variable "maximum_concurrency" {
+  description = "Cap on concurrent invocations the mapping drives (ScalingConfig.MaximumConcurrency, 2-1000). Null leaves the mapping uncapped. Set it at or below the function's reserved concurrency, so throttled batches do not burn receives toward the DLQ."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.maximum_concurrency == null || (try(var.maximum_concurrency >= 2 && var.maximum_concurrency <= 1000 && floor(var.maximum_concurrency) == var.maximum_concurrency, false))
+    error_message = "maximum_concurrency must be null or a whole number from 2 to 1000."
+  }
+}
+
 variable "max_receive_count" {
   description = "Receives before a message moves to the DLQ."
   type        = number

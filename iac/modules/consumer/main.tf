@@ -121,6 +121,13 @@ resource "aws_lambda_event_source_mapping" "this" {
   maximum_batching_window_in_seconds = var.maximum_batching_window_in_seconds
   function_response_types            = ["ReportBatchItemFailures"]
 
+  dynamic "scaling_config" {
+    for_each = var.maximum_concurrency == null ? [] : [var.maximum_concurrency]
+    content {
+      maximum_concurrency = scaling_config.value
+    }
+  }
+
   lifecycle {
     precondition {
       condition     = length(trimspace(var.function_arn)) > 0
