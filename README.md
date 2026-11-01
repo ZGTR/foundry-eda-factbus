@@ -123,8 +123,11 @@ product's own IaC and change only what is the product's:
 2. **Pin the modules.** Replace each relative `source` with the git source at a reviewed
    commit, for example
    `git::https://github.com/ZGTR/mshaker-foundry-eda-factbus.git//iac/modules/consumer?ref=<sha>`.
-   Pin one sha for all three modules, and vendor or `pip install` the Python package at the
-   same sha.
+   Pin one sha for all three modules, and vendor the Python package at the same sha.
+   Point `factbus_src_dir` at the directory holding that vendored `factbus/` package, so
+   the consumer's zip ships it (the default, `../../src`, exists only inside this
+   repository). A product that builds its functions another way (serverless, SAM, a
+   container) replaces `data "archive_file"` with that artifact.
 3. **Producer.** Pass the role the product's API already runs as to `module "producer"`
    (`role_name`) and, once the product runs a sweeper Lambda
    (`SqlProducer.sweep_handler()`), its ARN as `sweeper_function_arn`. If the product's

@@ -29,7 +29,9 @@ locals {
   local        = var.localstack_endpoint != null
   event_source = "${var.prefix}.orders"
   event_type   = "order.placed"
-  src_dir      = "${path.module}/../../src"
+  # The directory that holds the `factbus/` package the Lambda ships. Here it is this
+  # repository's src/; a product points `factbus_src_dir` at its vendored copy.
+  src_dir = coalesce(var.factbus_src_dir, "${path.module}/../../src")
 }
 
 provider "aws" {
@@ -113,7 +115,9 @@ resource "aws_dynamodb_table" "ledger" {
   }
 }
 
-# handler.py plus the factbus package. boto3 ships with the python3.12 Lambda runtime.
+# handler.py plus the factbus package from `local.src_dir`. boto3 ships with the
+# python3.12 Lambda runtime. A product with its own build (serverless, SAM, a container)
+# replaces this archive with that build's artifact.
 data "archive_file" "consumer" {
   type        = "zip"
   output_path = "${path.module}/.build/consumer.zip"

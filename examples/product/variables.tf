@@ -25,3 +25,13 @@ variable "sweeper_function_arn" {
   type        = string
   default     = null
 }
+
+variable "factbus_src_dir" {
+  description = "Directory containing the `factbus/` package to ship in the consumer's zip (for example the product's `vendor/`, holding factbus at the pinned sha). Null: this repository's src/, which exists only inside the factbus repository."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.factbus_src_dir == null || length(fileset(coalesce(var.factbus_src_dir, "."), "factbus/__init__.py")) == 1
+    error_message = "factbus_src_dir must contain factbus/__init__.py."
+  }
+}

@@ -100,3 +100,19 @@ run "an_empty_prefix_is_refused" {
   }
   expect_failures = [var.prefix]
 }
+
+# A copied root ships the product's vendored factbus, not this repository's src/.
+run "a_vendored_factbus_dir_is_accepted" {
+  command = plan
+  variables {
+    factbus_src_dir = "../../src"
+  }
+}
+
+run "a_src_dir_without_factbus_is_refused" {
+  command = plan
+  variables {
+    factbus_src_dir = "/nonexistent"
+  }
+  expect_failures = [var.factbus_src_dir]
+}

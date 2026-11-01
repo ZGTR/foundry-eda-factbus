@@ -10,7 +10,9 @@ commit. Each arm prints PASS/FAIL rows; any FAIL exits 1:
                outbox row is marked sent by the after-commit publish (no sweep).
 2. consumed:   the consumer's Lambda applies that fact: exactly one ledger item and one
                inbox record for its id, and the queue drains.
-3. rollback:   an order whose transaction rolls back leaves no order, no outbox row and
+3. redelivered: the same CloudEvents id put on the bus again is not applied twice; a
+               control fact staged after it is applied and the queue drains.
+4. rollback:   an order whose transaction rolls back leaves no order, no outbox row and
                no ledger item; the committed control order staged right after it is applied,
                so its absence is not mere lateness.
 
@@ -50,12 +52,15 @@ sys.path.insert(0, str(REPO / "src"))
 
 from factbus import Event, SqlProducer
 
-ORDERS = Table(
-    "e2e_product_orders",
-    MetaData(),
-    Column("id", Integer, primary_key=True),
-    Column("item", String(50), nullable=False),
-)
+
+def orders_table(run_id: str) -> Table:
+    """The product's own table, one per run, so concurrent runs never drop each other's."""
+    return Table(
+        f"e2e_product_orders_{run_id}",
+        MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("item", String(50), nullable=False),
+    )
 
 
 def tofu_outputs(tf_dir: str) -> dict[str, Any]:
@@ -114,6 +119,7 @@ def main() -> int:
         kwargs["endpoint_url"] = endpoint
     ddb = boto3.resource("dynamodb", **kwargs)
     sqs = boto3.client("sqs", **kwargs)
+    events = boto3.client("events", **kwargs)
     ledger = ddb.Table(consumer["ledger_table"])
     inbox = ddb.Table(consumer["inbox_table"])
 
@@ -143,6 +149,7 @@ def main() -> int:
     # A per-run outbox table, so reruns against the same compose database never see an
     # earlier run's rows.
     run_id = uuid.uuid4().hex[:8]
+    ORDERS = orders_table(run_id)
     producer = SqlProducer.connect(
         engine,
         bus_name=out["bus_name"],
@@ -188,7 +195,33 @@ def main() -> int:
         drained, _ = wait_for(lambda: queue_depth() == 0, args.timeout)
         check("drained", drained, f"queue depth {queue_depth()}")
 
-        # 3. rollback: nothing leaves a rolled-back transaction.
+        # 3. redelivered: the same CloudEvents id put on the bus again (a replay, or the
+        # sweep re-sending a row whose first publish was not acknowledged) changes nothing.
+        # A control event put after it must be applied, so the copy was consumed, not late.
+        response = events.put_events(
+            Entries=[
+                {
+                    "EventBusName": out["bus_name"],
+                    "Source": first.source,
+                    "DetailType": first.type,
+                    "Detail": json.dumps(first.to_envelope()),
+                }
+            ]
+        )
+        dup_control = placed(base + 4, "cup")
+        with Session(engine) as session, session.begin():
+            session.execute(ORDERS.insert().values(id=base + 4, item="cup"))
+            producer.stage(session, dup_control)
+        ok, _ = wait_for(lambda: ledger_count(dup_control.id) == 1, args.timeout)
+        drained, _ = wait_for(lambda: queue_depth() == 0, args.timeout)
+        count = ledger_count(first.id)
+        check(
+            "redelivered",
+            not response.get("FailedEntryCount") and ok and drained and count == 1,
+            f"same id {first.id} put again: ledger items {count}; control applied={ok}; drained={drained}",
+        )
+
+        # 4. rollback: nothing leaves a rolled-back transaction.
         rolled = placed(base + 2, "lamp")
         try:
             with Session(engine) as session, session.begin():
