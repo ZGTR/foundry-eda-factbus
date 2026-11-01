@@ -180,15 +180,15 @@ run "mapping_reports_batch_item_failures" {
     maximum_batching_window_in_seconds = 5
   }
   assert {
-    condition     = contains(aws_lambda_event_source_mapping.this.function_response_types, "ReportBatchItemFailures")
+    condition     = contains(aws_lambda_event_source_mapping.this[0].function_response_types, "ReportBatchItemFailures")
     error_message = "the mapping must report partial batch failures"
   }
   assert {
     condition = (
-      aws_lambda_event_source_mapping.this.enabled == true
-      && aws_lambda_event_source_mapping.this.batch_size == 25
-      && aws_lambda_event_source_mapping.this.maximum_batching_window_in_seconds == 5
-      && aws_lambda_event_source_mapping.this.event_source_arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+      aws_lambda_event_source_mapping.this[0].enabled == true
+      && aws_lambda_event_source_mapping.this[0].batch_size == 25
+      && aws_lambda_event_source_mapping.this[0].maximum_batching_window_in_seconds == 5
+      && aws_lambda_event_source_mapping.this[0].event_source_arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
     )
     error_message = "the mapping must be on, read this queue and carry the batch settings"
   }
@@ -200,13 +200,65 @@ run "kill_switch_disables_the_mapping_only" {
     enabled = false
   }
   assert {
-    condition     = aws_lambda_event_source_mapping.this.enabled == false
+    condition     = aws_lambda_event_source_mapping.this[0].enabled == false
     error_message = "enabled = false must disable the event source mapping"
   }
   assert {
     condition     = aws_sqs_queue.this.name == "event-ledger" && aws_cloudwatch_event_rule.this.name == "event-ledger"
     error_message = "the kill switch must leave the queue and rule in place, so events wait rather than vanish"
   }
+}
+
+# Queue-first deploy (Shepherd's infra/events): the queue exists and is an output before
+# the function does, so there is no mapping to create and no function for the Lambda
+# Errors alarm to name.
+run "without_the_mapping_the_queue_is_still_created_and_output" {
+  command = plan
+  variables {
+    create_event_source_mapping = false
+    function_arn                = ""
+  }
+  assert {
+    condition     = length(aws_lambda_event_source_mapping.this) == 0 && output.mapping_uuid == null
+    error_message = "create_event_source_mapping = false must create no event source mapping"
+  }
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.lambda_errors) == 0
+    error_message = "create_event_source_mapping = false must create no Lambda Errors alarm (it would name an empty function)"
+  }
+  assert {
+    condition = (
+      output.queue_arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+      && aws_sqs_queue.this.name == "event-ledger"
+      && aws_cloudwatch_event_target.this.arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+    )
+    error_message = "the queue, its rule target and the queue_arn output must exist without the mapping"
+  }
+  assert {
+    condition     = output.alarm_names == ["event-ledger-dlq-visible", "event-ledger-delivery-dlq-visible", "event-ledger-age"]
+    error_message = "the three queue alarms stay; only the Lambda Errors alarm goes: ${jsonencode(output.alarm_names)}"
+  }
+}
+
+# Positive control for the run above: by default both exist.
+run "by_default_the_mapping_and_the_errors_alarm_exist" {
+  command = plan
+  assert {
+    condition     = length(aws_lambda_event_source_mapping.this) == 1 && length(aws_cloudwatch_metric_alarm.lambda_errors) == 1
+    error_message = "the default must create the event source mapping and the Lambda Errors alarm"
+  }
+  assert {
+    condition     = length(output.alarm_names) == 4 && contains(output.alarm_names, "event-ledger-errors")
+    error_message = "the default must report four alarms, including the Lambda Errors alarm"
+  }
+}
+
+run "an_empty_function_with_the_mapping_is_refused" {
+  command = plan
+  variables {
+    function_arn = ""
+  }
+  expect_failures = [aws_lambda_event_source_mapping.this]
 }
 
 run "alarms_notify_the_topic_when_given" {
@@ -218,7 +270,7 @@ run "alarms_notify_the_topic_when_given" {
     condition = (
       aws_cloudwatch_metric_alarm.dlq_visible.alarm_actions == toset(["arn:aws:sns:eu-west-1:111111111111:ops"])
       && aws_cloudwatch_metric_alarm.queue_age.alarm_actions == toset(["arn:aws:sns:eu-west-1:111111111111:ops"])
-      && aws_cloudwatch_metric_alarm.lambda_errors.alarm_actions == toset(["arn:aws:sns:eu-west-1:111111111111:ops"])
+      && aws_cloudwatch_metric_alarm.lambda_errors[0].alarm_actions == toset(["arn:aws:sns:eu-west-1:111111111111:ops"])
       && aws_cloudwatch_metric_alarm.delivery_dlq_visible.alarm_actions == toset(["arn:aws:sns:eu-west-1:111111111111:ops"])
     )
     error_message = "every alarm must notify alarm_topic_arn"
@@ -229,8 +281,8 @@ run "alarms_notify_the_topic_when_given" {
       && aws_cloudwatch_metric_alarm.dlq_visible.threshold == 0
       && aws_cloudwatch_metric_alarm.dlq_visible.comparison_operator == "GreaterThanThreshold"
       && aws_cloudwatch_metric_alarm.queue_age.metric_name == "ApproximateAgeOfOldestMessage"
-      && aws_cloudwatch_metric_alarm.lambda_errors.namespace == "AWS/Lambda"
-      && aws_cloudwatch_metric_alarm.lambda_errors.dimensions["FunctionName"] == "event-ledger" && length(aws_cloudwatch_metric_alarm.lambda_errors.dimensions) == 1
+      && aws_cloudwatch_metric_alarm.lambda_errors[0].namespace == "AWS/Lambda"
+      && aws_cloudwatch_metric_alarm.lambda_errors[0].dimensions["FunctionName"] == "event-ledger" && length(aws_cloudwatch_metric_alarm.lambda_errors[0].dimensions) == 1
     )
     error_message = "alarms: DLQ visible > 0, queue age, and Lambda Errors on the function's name"
   }
