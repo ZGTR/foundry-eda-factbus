@@ -120,6 +120,7 @@ def main() -> int:
     ddb = boto3.resource("dynamodb", **kwargs)
     sqs = boto3.client("sqs", **kwargs)
     events = boto3.client("events", **kwargs)
+    logs = boto3.client("logs", **kwargs)
     ledger = ddb.Table(consumer["ledger_table"])
     inbox = ddb.Table(consumer["inbox_table"])
 
@@ -144,6 +145,23 @@ def main() -> int:
             AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
         )["Attributes"]
         return int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+    def duplicate_lines(since_ms: int) -> int:
+        """The consumer's own EMF lines counting a skipped duplicate since `since_ms`."""
+        group = f"/aws/lambda/{consumer['function_name']}"
+        count, token = 0, None
+        while True:
+            request: dict[str, Any] = {"logGroupName": group, "startTime": since_ms}
+            if token:
+                request["nextToken"] = token
+            try:
+                response = logs.filter_log_events(**request)
+            except logs.exceptions.ResourceNotFoundException:
+                return 0
+            count += sum(1 for e in response["events"] if '"ConsumerDuplicates"' in e["message"])
+            token = response.get("nextToken")
+            if not token:
+                return count
 
     engine = make_engine(args.db_url)
     # A per-run outbox table, so reruns against the same compose database never see an
@@ -198,6 +216,7 @@ def main() -> int:
         # 3. redelivered: the same CloudEvents id put on the bus again (a replay, or the
         # sweep re-sending a row whose first publish was not acknowledged) changes nothing.
         # A control event put after it must be applied, so the copy was consumed, not late.
+        since_ms = int(time.time() * 1000) - 1000
         response = events.put_events(
             Entries=[
                 {
@@ -213,12 +232,16 @@ def main() -> int:
             session.execute(ORDERS.insert().values(id=base + 4, item="cup"))
             producer.stage(session, dup_control)
         ok, _ = wait_for(lambda: ledger_count(dup_control.id) == 1, args.timeout)
+        # The copy itself must have reached the consumer, which records it as a duplicate;
+        # an empty queue alone could mean it is still in flight.
+        seen, _ = wait_for(lambda: duplicate_lines(since_ms) >= 1, args.timeout, interval=2.0)
         drained, _ = wait_for(lambda: queue_depth() == 0, args.timeout)
         count = ledger_count(first.id)
         check(
             "redelivered",
-            not response.get("FailedEntryCount") and ok and drained and count == 1,
-            f"same id {first.id} put again: ledger items {count}; control applied={ok}; drained={drained}",
+            not response.get("FailedEntryCount") and ok and seen and drained and count == 1,
+            f"same id {first.id} put again: consumer logged ConsumerDuplicates={seen}; "
+            f"ledger items {count}; control applied={ok}; drained={drained}",
         )
 
         # 4. rollback: nothing leaves a rolled-back transaction.
