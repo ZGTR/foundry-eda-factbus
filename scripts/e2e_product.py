@@ -136,8 +136,8 @@ def main() -> int:
         return len(response["Items"])
 
     def in_inbox(event_id: str) -> bool:
-        response = inbox.scan(ConsistentRead=True)
-        return any(event_id in json.dumps(item, default=str) for item in response["Items"])
+        response = inbox.get_item(Key={"pk": f"inbox#{event_id}", "sk": "inbox"}, ConsistentRead=True)
+        return "Item" in response
 
     def queue_depth() -> int:
         attrs = sqs.get_queue_attributes(
