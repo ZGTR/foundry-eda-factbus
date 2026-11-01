@@ -112,6 +112,47 @@ If the call raises after the provider may already have accepted the request, the
 becomes `Unknown` and is never retried automatically. A duplicate email is the worse
 failure.
 
+## Adopt in a product
+
+[`examples/product/`](examples/product/) is a complete product root: one bus, the
+producer's grant, and one consumer with its Lambda, inbox and alarms. Copy it into the
+product's own IaC and change only what is the product's:
+
+1. **Name it.** Set `prefix` (it names every resource and the event source
+   `<prefix>.orders`) and replace `order.placed` with the product's fact type.
+2. **Pin the modules.** Replace each relative `source` with the git source at a reviewed
+   commit, for example
+   `git::https://github.com/ZGTR/mshaker-foundry-eda-factbus.git//iac/modules/consumer?ref=<sha>`.
+   Pin one sha for all three modules, and vendor or `pip install` the Python package at the
+   same sha.
+3. **Producer.** Pass the role the product's API already runs as to `module "producer"`
+   (`role_name`) and, once the product runs a sweeper Lambda
+   (`SqlProducer.sweep_handler()`), its ARN as `sweeper_function_arn`. If the product's
+   own stack already grants `events:PutEvents` and schedules the sweep, drop the module
+   instead of describing the same grant twice.
+4. **Outbox table.** Create it from the product's own migrations with
+   `factbus.adapters.sql_migration.upgrade_0001(op)`, then call `producer.stage(session,
+   Event(...))` wherever the fact happens, inside the transaction that makes it true.
+5. **Consumers.** Keep `handler.py` as the shape of a consumer: one decorated function
+   that writes through `tx`. Add one `module "consumer_<name>"` block per consumer; each
+   gets its own rule, queue, DLQs and inbox.
+6. **Notifications are optional.** A product that also tells people about its facts adds
+   the `notifications` module from `ZGTR/mshaker-foundry-eda-notifications`; the example
+   leaves it out.
+
+Prove the copy before it reaches an account:
+
+```bash
+tofu -chdir=examples/product init -backend=false && tofu -chdir=examples/product test   # offline, mocked
+make up && make e2e-product                     # LocalStack: stage in SQL, publish, consume once
+```
+
+`make e2e-product` applies the example to LocalStack, commits an order and its
+`order.placed` fact in one transaction (PostgreSQL from compose), checks that the
+after-commit publish marked the outbox row sent, that the consumer applied the fact
+exactly once, and that a rolled-back order leaves no row and no fact. It then destroys
+the stack.
+
 ## Run it locally
 
 ```bash
@@ -119,6 +160,7 @@ docker compose up -d --wait        # LocalStack 3.8, PostgreSQL 16, MySQL 8.0
 make test                          # unit suite, no Docker needed
 make integration                   # real engines + LocalStack
 make e2e                           # examples/hello: two consumers, once each, kill switch, DLQ
+make e2e-product                   # examples/product: bus, producer and one consumer, as a product copies it
 ```
 
 ## What factbus guarantees, and what it does not
