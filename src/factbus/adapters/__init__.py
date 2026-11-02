@@ -39,9 +39,11 @@ if TYPE_CHECKING:
         downgrade_0001,
         downgrade_claims_0001,
         downgrade_inbox_0001,
+        downgrade_inbox_0002,
         upgrade_0001,
         upgrade_claims_0001,
         upgrade_inbox_0001,
+        upgrade_inbox_0002,
     )
 
 #: Each SQLAlchemy-backed name, mapped to the submodule (relative to this package) that defines it.
@@ -61,9 +63,11 @@ _LAZY = {
     "downgrade_0001": ".sql_migration",
     "downgrade_claims_0001": ".sql_migration",
     "downgrade_inbox_0001": ".sql_migration",
+    "downgrade_inbox_0002": ".sql_migration",
     "upgrade_0001": ".sql_migration",
     "upgrade_claims_0001": ".sql_migration",
     "upgrade_inbox_0001": ".sql_migration",
+    "upgrade_inbox_0002": ".sql_migration",
 }
 
 __all__ = [
@@ -91,12 +95,14 @@ __all__ = [
     "downgrade_0001",
     "downgrade_claims_0001",
     "downgrade_inbox_0001",
+    "downgrade_inbox_0002",
     "due_rows_query",
     "inbox_table",
     "outbox_table",
     "upgrade_0001",
     "upgrade_claims_0001",
     "upgrade_inbox_0001",
+    "upgrade_inbox_0002",
 ]
 
 

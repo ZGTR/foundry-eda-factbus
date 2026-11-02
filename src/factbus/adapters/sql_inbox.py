@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import BigInteger, Column, MetaData, String, Table, delete, insert, select, update
+from sqlalchemy import BigInteger, Column, Index, MetaData, String, Table, delete, insert, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -57,6 +57,7 @@ def inbox_table(metadata: MetaData, name: str = DEFAULT_INBOX_TABLE_NAME) -> Tab
         metadata,
         Column("event_id", String(128), primary_key=True),
         Column("received_at", TIMESTAMP, nullable=False),
+        Index(f"ix_{name}_received_at", "received_at"),  # inbox migration 0002; serves `purge`
     )
 
 

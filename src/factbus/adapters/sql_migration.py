@@ -30,9 +30,11 @@ __all__ = [
     "downgrade_0001",
     "downgrade_claims_0001",
     "downgrade_inbox_0001",
+    "downgrade_inbox_0002",
     "upgrade_0001",
     "upgrade_claims_0001",
     "upgrade_inbox_0001",
+    "upgrade_inbox_0002",
 ]
 
 _TIMESTAMP = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
@@ -87,6 +89,15 @@ def downgrade_inbox_0001(
 ) -> None:
     op.drop_table(versions_name)
     op.drop_table(inbox_name)
+
+
+def upgrade_inbox_0002(op, inbox_name: str = DEFAULT_INBOX_TABLE_NAME) -> None:
+    """Index `received_at` so `SqlInbox.purge` reads only the rows it deletes."""
+    op.create_index(f"ix_{inbox_name}_received_at", inbox_name, ["received_at"])
+
+
+def downgrade_inbox_0002(op, inbox_name: str = DEFAULT_INBOX_TABLE_NAME) -> None:
+    op.drop_index(f"ix_{inbox_name}_received_at", table_name=inbox_name)
 
 
 def upgrade_claims_0001(op, table_name: str = DEFAULT_CLAIMS_TABLE_NAME) -> None:

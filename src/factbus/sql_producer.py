@@ -120,12 +120,21 @@ class SqlProducer:
     def stage(self, session_or_connection: Any, event_: Event | dict) -> OutboxRow:
         """Insert the event's outbox row in the caller's transaction. Never begins or
         commits; database errors propagate so the caller's transaction rolls back."""
-        envelope = event_.to_envelope() if isinstance(event_, Event) else event_
+        envelope = event_.to_envelope() if isinstance(event_, Event) else self._dated(event_)
         row = self.store.add(session_or_connection, envelope)
         info = getattr(session_or_connection, "info", None)
         if isinstance(session_or_connection, Session) and info is not None:
             info.setdefault(self._staged_key, []).append(row)
         return row
+
+    def _dated(self, envelope: dict) -> dict:
+        """A dict envelope without its own timestamp gets one now, at staging: consumers
+        refuse an undated envelope, because its age (and so its replay safety) is unknown.
+        Stamped here, never at publish, so a republish cannot make an old event look new."""
+        if envelope.get("time") or envelope.get("occurred_at"):
+            return envelope
+        key = "time" if envelope.get("specversion") == "1.0" else "occurred_at"
+        return {**envelope, key: self._clock().isoformat()}
 
     def attach(self) -> None:
         """Publish each Session's staged rows after its commit; forget them on rollback.

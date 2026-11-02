@@ -55,6 +55,8 @@ def test_migration_matches_the_runtime_tables(inbox_world):
         assert inspector.get_pk_constraint(runtime.name)["constrained_columns"] == [
             c.name for c in runtime.primary_key.columns
         ]
+    reflected_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes(inbox.name)}
+    assert ("received_at",) in reflected_indexes  # inbox migration 0002, used by purge
     assert inbox_table(MetaData()).name == "factbus_inbox"
     assert applied_versions_table(MetaData()).name == "factbus_applied_version"
 

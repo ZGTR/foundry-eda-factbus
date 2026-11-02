@@ -148,7 +148,7 @@ print(f"calls this run: {len(sent)}")            # 1 on a fresh table; 0 on a se
 ```
 
 Rows are kept until you purge them. Run `claims.purge()` (and `inbox.purge()` for a
-`SqlInbox`) on a schedule, for example daily: each deletes rows older than 35 days in
+`SqlInbox`, after inbox migration `upgrade_inbox_0002` adds its `received_at` index) on a schedule, for example daily: each deletes rows older than 35 days in
 batches of 1,000, and `SqlClaimStore.purge` also keeps any row whose own `once`
 retention has not run. Purging is safe because the consumer refuses an event older than
 30 days (`max_event_age`) before it reads the inbox, so no event it accepts can meet a
