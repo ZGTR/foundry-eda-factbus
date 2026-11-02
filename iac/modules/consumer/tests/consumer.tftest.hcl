@@ -63,6 +63,42 @@ run "rule_matches_sources_and_types_and_targets_the_queue" {
   }
 }
 
+# detail_pattern narrows the rule on `detail`. The rendered pattern must equal the shared
+# fixture's, which tests/unit and tests/integration feed to EventBridge's TestEventPattern
+# (moto and LocalStack) to prove the whatsapp event matches and the email one does not.
+# The run above is the control: with detail_pattern null the rule carries no `detail`.
+run "detail_pattern_is_merged_into_the_rule" {
+  command = plan
+  variables {
+    detail_pattern = { channel = ["whatsapp"] }
+  }
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_rule.this.event_pattern) == jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).pattern
+    error_message = "the rule must carry source, detail-type and the detail filter: ${aws_cloudwatch_event_rule.this.event_pattern}"
+  }
+  assert {
+    condition = (
+      contains(
+        jsondecode(aws_cloudwatch_event_rule.this.event_pattern).detail.channel,
+        jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).matching_event.detail.channel,
+      )
+      && !contains(
+        jsondecode(aws_cloudwatch_event_rule.this.event_pattern).detail.channel,
+        jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).non_matching_event.detail.channel,
+      )
+    )
+    error_message = "a rule for channel=whatsapp must admit the whatsapp event's channel and not the email event's"
+  }
+}
+
+run "an_empty_detail_pattern_is_refused" {
+  command = plan
+  variables {
+    detail_pattern = {}
+  }
+  expect_failures = [var.detail_pattern]
+}
+
 run "queue_policy_admits_only_the_rule" {
   command = plan
   assert {

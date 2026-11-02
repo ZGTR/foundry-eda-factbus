@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "factbus"
-version = "0.1.0.dev0"
+version = "0.1.0a1"
 description = "Event-driven services on AWS out of the box: transactional outbox to EventBridge, SQS consumers that apply each event once, and a guard for side effects that must not repeat"
 readme = "README.md"
 license = "Apache-2.0"

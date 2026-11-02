@@ -1,12 +1,12 @@
 """I/O for the outbox and the consumer: EventBridge, SQS visibility, the SQL tables and
-their migrations, the DynamoDB inbox, EMF metrics.
+their migrations, the DynamoDB inbox, the claim stores behind `once`, EMF metrics.
 
 Nothing here constructs itself. A composition root calls `build_eventbridge_bus` and
 the constructors below and injects the results into the application layer.
 
 The SQL names load on first use (PEP 562), so a Lambda consumer that only needs
 `DynamoInbox` never imports SQLAlchemy or Alembic. `from factbus.adapters import SqlInbox`
-works as before.
+(or `SqlClaimStore`) works as before.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from factbus.adapters.sqs_visibility import SQS_CLIENT_CONFIG, SqsVisibility, bu
 
 if TYPE_CHECKING:
     from factbus.adapters.sql import DEFAULT_TABLE_NAME, SqlOutboxStore, due_rows_query, outbox_table
+    from factbus.adapters.sql_claims import DEFAULT_CLAIMS_TABLE_NAME, SqlClaimStore, claims_table
     from factbus.adapters.sql_inbox import (
         DEFAULT_INBOX_TABLE_NAME,
         DEFAULT_VERSIONS_TABLE_NAME,
@@ -34,7 +35,14 @@ if TYPE_CHECKING:
         applied_versions_table,
         inbox_table,
     )
-    from factbus.adapters.sql_migration import downgrade_0001, downgrade_inbox_0001, upgrade_0001, upgrade_inbox_0001
+    from factbus.adapters.sql_migration import (
+        downgrade_0001,
+        downgrade_claims_0001,
+        downgrade_inbox_0001,
+        upgrade_0001,
+        upgrade_claims_0001,
+        upgrade_inbox_0001,
+    )
 
 #: Each SQLAlchemy-backed name, mapped to the submodule (relative to this package) that defines it.
 _LAZY = {
@@ -42,18 +50,24 @@ _LAZY = {
     "SqlOutboxStore": ".sql",
     "due_rows_query": ".sql",
     "outbox_table": ".sql",
+    "DEFAULT_CLAIMS_TABLE_NAME": ".sql_claims",
+    "SqlClaimStore": ".sql_claims",
+    "claims_table": ".sql_claims",
     "DEFAULT_INBOX_TABLE_NAME": ".sql_inbox",
     "DEFAULT_VERSIONS_TABLE_NAME": ".sql_inbox",
     "SqlInbox": ".sql_inbox",
     "applied_versions_table": ".sql_inbox",
     "inbox_table": ".sql_inbox",
     "downgrade_0001": ".sql_migration",
+    "downgrade_claims_0001": ".sql_migration",
     "downgrade_inbox_0001": ".sql_migration",
     "upgrade_0001": ".sql_migration",
+    "upgrade_claims_0001": ".sql_migration",
     "upgrade_inbox_0001": ".sql_migration",
 }
 
 __all__ = [
+    "DEFAULT_CLAIMS_TABLE_NAME",
     "DEFAULT_INBOX_TABLE_NAME",
     "DEFAULT_TABLE_NAME",
     "DEFAULT_VERSIONS_TABLE_NAME",
@@ -64,6 +78,7 @@ __all__ = [
     "DynamoTransaction",
     "EmfMetrics",
     "EventBridgeBus",
+    "SqlClaimStore",
     "SqlInbox",
     "SqlOutboxStore",
     "SqsVisibility",
@@ -72,12 +87,15 @@ __all__ = [
     "build_dynamo_inbox",
     "build_eventbridge_bus",
     "build_sqs_visibility",
+    "claims_table",
     "downgrade_0001",
+    "downgrade_claims_0001",
     "downgrade_inbox_0001",
     "due_rows_query",
     "inbox_table",
     "outbox_table",
     "upgrade_0001",
+    "upgrade_claims_0001",
     "upgrade_inbox_0001",
 ]
 

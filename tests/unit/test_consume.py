@@ -4,6 +4,9 @@ Concurrency (C0b-17) is proved on real engines in tests/integration."""
 
 from __future__ import annotations
 
+import json
+from datetime import timedelta
+
 import pytest
 
 from factbus.application import Consumer, TransportFieldsMissing
@@ -184,3 +187,122 @@ def test_without_version_of_only_the_inbox_guards():
     consumer.handle_batch([sqs_record(envelope(1, authority_epoch=9), message_id="a"),
                            sqs_record(envelope(2, authority_epoch=1), message_id="b")])
     assert effects.applied == ["evt-00001", "evt-00002"] and inbox.versions == {}
+
+
+# --- The age limit: an event older than `max_event_age` never reaches the inbox. ---------
+
+
+class SpyInbox(MemoryInbox):
+    """Records every `process` call, so a test can prove the inbox was never touched."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def process(self, event, *, subject, effect):
+        self.calls.append(event.event_id)
+        return super().process(event, subject=subject, effect=effect)
+
+
+@pytest.fixture
+def aged():
+    clock = ManualClock()
+    inbox, visibility, effects, metrics = SpyInbox(), ScriptedVisibility(), Effects(), CountingMetrics()
+    consumer = Consumer(
+        inbox=inbox, visibility=visibility, effect=effects, schedule=BackoffSchedule(), clock=clock, metrics=metrics,
+    )
+    return consumer, inbox, visibility, effects, metrics, clock
+
+
+def test_an_event_past_the_age_limit_is_refused_before_the_inbox(aged):
+    consumer, inbox, visibility, effects, metrics, clock = aged
+    clock.advance(timedelta(days=30, seconds=1).total_seconds())  # envelope(...) occurred at T0
+
+    report = consumer.process_batch([sqs_record(envelope(1), message_id="m1", receive_count=2)])
+
+    assert report.response == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+    assert report.expired == ["m1"]
+    assert inbox.calls == [] and effects.applied == []
+    assert metrics.counts["ConsumerExpired"] == 1
+    assert visibility.calls == [("rh-m1-2", 120)]  # reported with the ordinary backoff
+
+
+def test_an_event_at_the_age_limit_is_still_applied(aged):
+    consumer, inbox, _, effects, _, clock = aged
+    clock.advance(timedelta(days=30).total_seconds())
+
+    assert consumer.handle_batch([sqs_record(envelope(1), message_id="m1")]) == {"batchItemFailures": []}
+    assert inbox.calls == ["evt-00001"] and effects.applied == ["evt-00001"]
+
+
+def test_the_age_counts_from_the_earliest_timestamp_the_event_carries(aged):
+    """A replay could carry a fresh EventBridge `time`; a producer could stamp a late
+    envelope time. Either way the oldest stamp decides, so the age is never understated."""
+    consumer, inbox, _, _, _, clock = aged
+    clock.advance(timedelta(days=31).total_seconds())
+    record = sqs_record(envelope(1, occurred_at=clock().isoformat()), message_id="m1")
+    body = json.loads(record["body"])
+    body["time"] = "2026-09-25T12:00:00Z"  # T0: 31 days before the clock
+    record["body"] = json.dumps(body)
+
+    assert consumer.process_batch([record]).expired == ["m1"]
+    assert inbox.calls == []
+
+
+def test_a_cloudevents_time_is_read_too(aged):
+    from factbus.envelope import Event
+
+    consumer, inbox, _, _, _, clock = aged
+    old = Event(id="ce-1", type="x", source="s", data={}, time="2026-08-01T00:00:00+00:00").to_envelope()
+    new = Event(id="ce-2", type="x", source="s", data={}, time=clock().isoformat()).to_envelope()
+
+    report = consumer.process_batch([sqs_record(old, message_id="m-old"), sqs_record(new, message_id="m-new")])
+
+    assert report.expired == ["m-old"] and report.applied == ["m-new"]
+    assert inbox.calls == ["ce-2"]
+
+
+def test_an_event_without_a_readable_timestamp_is_malformed(aged):
+    consumer, inbox, _, _, metrics, _ = aged
+    undated = {key: value for key, value in envelope(1).items() if key != "occurred_at"}
+
+    report = consumer.process_batch([sqs_record(undated, message_id="m1")])
+
+    assert report.failed == ["m1"] and report.expired == []
+    assert inbox.calls == [] and metrics.counts["ConsumerMalformed"] == 1
+
+
+def test_the_age_limit_is_configurable_and_must_be_positive():
+    clock, inbox = ManualClock(), SpyInbox()
+
+    def build(max_event_age):
+        return Consumer(
+            inbox=inbox, visibility=ScriptedVisibility(), effect=Effects(), schedule=BackoffSchedule(), clock=clock,
+            metrics=CountingMetrics(), max_event_age=max_event_age,
+        )
+
+    consumer = build(timedelta(hours=1))
+    clock.advance(3601)
+    assert consumer.process_batch([sqs_record(envelope(1), message_id="m1")]).expired == ["m1"]
+    assert inbox.calls == []
+    with pytest.raises(ValueError):
+        build(timedelta(0))
+
+
+def test_the_decorator_passes_its_age_limit_to_the_consumer():
+    from factbus.consumer_handler import consumer
+    from factbus.envelope import Event
+
+    inbox, seen = SpyInbox(), []
+
+    @consumer(inbox=inbox, metrics=CountingMetrics(), visibility=lambda arn: ScriptedVisibility(),
+              max_event_age=timedelta(days=1))
+    def handler(event, tx):
+        seen.append(event.id)
+
+    old = Event(id="ce-old", type="x", source="s", data={}, time="2000-01-01T00:00:00+00:00").to_envelope()
+    record = sqs_record(old, message_id="m-old")
+    record["eventSourceARN"] = "arn:aws:sqs:eu-west-1:111111111111:q"
+
+    assert handler({"Records": [record]}, None) == {"batchItemFailures": [{"itemIdentifier": "m-old"}]}
+    assert inbox.calls == [] and seen == []

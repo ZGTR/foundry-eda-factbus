@@ -112,6 +112,49 @@ If the call raises after the provider may already have accepted the request, the
 becomes `Unknown` and is never retried automatically. A duplicate email is the worse
 failure.
 
+#### On your SQL database: `SqlClaimStore`
+
+A service that already runs PostgreSQL or MySQL can keep its claims there.
+`SqlClaimStore` gives `once` the same contract as the DynamoDB store: one attempt per
+key across processes, `Unknown` after a crash or an uncertain failure, a release on
+`CertainlyNotSent`, and `KeyReused` when one key arrives with different content. Against
+the compose MySQL (`make up`, then `pip install 'factbus[mysql]'`):
+
+```python
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import create_engine, inspect
+
+from factbus import once
+from factbus.adapters import SqlClaimStore
+from factbus.adapters.sql_migration import upgrade_claims_0001
+
+engine = create_engine("mysql+pymysql://factbus:factbus@localhost:3326/factbus")
+if not inspect(engine).has_table("factbus_claims"):
+    with engine.begin() as connection:          # in a service: `upgrade_claims_0001(op)` in an Alembic revision
+        upgrade_claims_0001(Operations(MigrationContext.configure(connection)))
+
+claims = SqlClaimStore(engine)                   # table `factbus_claims`
+sent = []
+
+@once(key=lambda to: f"welcome#{to}", store=claims, digest=lambda to: to)
+def send_welcome(to):
+    sent.append(to)                              # the provider call: one attempt, no SDK retries
+    return {"message_id": f"m-{len(sent)}"}
+
+print(send_welcome("a@example.com"))             # {'message_id': 'm-1'} on a fresh table
+print(send_welcome("a@example.com"))             # the same result, without calling again
+print(f"calls this run: {len(sent)}")            # 1 on a fresh table; 0 on a second run
+```
+
+Rows are kept until you purge them. Run `claims.purge()` (and `inbox.purge()` for a
+`SqlInbox`) on a schedule, for example daily: each deletes rows older than 35 days in
+batches of 1,000, and `SqlClaimStore.purge` also keeps any row whose own `once`
+retention has not run. Purging is safe because the consumer refuses an event older than
+30 days (`max_event_age`) before it reads the inbox, so no event it accepts can meet a
+row that is already gone. If you lengthen the retention, lengthen the purge window to
+match and keep `max_event_age` below it.
+
 ## Adopt in a product
 
 [`examples/product/`](examples/product/) is a complete product root: one bus, the
@@ -173,7 +216,8 @@ make e2e-product                   # examples/product: bus, producer and one con
 | A fact is published at least once if and only if its transaction committed | outbox row in the same transaction, published after commit, swept every minute |
 | A consumer applies each event once | inbox keyed on the event `id`, written in the same transaction as the effect |
 | An older version never overwrites a newer one | optional `version_of`, conditional write |
-| A side effect runs at most once per key | `once`: claim before the call, unknown outcomes are final |
+| A side effect runs at most once per key | `once`: claim before the call, unknown outcomes are final (DynamoDB or SQL claim store) |
+| A replay never outlives its dedupe record | events older than 30 days are refused before the inbox; inbox and claim rows are kept 35 days |
 | One poison message does not block its batch | `ReportBatchItemFailures` plus per-message backoff |
 | An event EventBridge cannot deliver is kept | target retry policy, then the consumer's delivery DLQ |
 
@@ -195,5 +239,5 @@ the EventBridge `detail`.
 
 ## Status
 
-`0.1.0.dev0`, pre-release. Python 3.12+. Licensed under Apache-2.0. See
+`0.1.0a1`, an alpha pre-release. Python 3.12+. Licensed under Apache-2.0. See
 [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).

@@ -1,0 +1,30 @@
+{
+  "_comment": "Shared by consumer.tftest.hcl (the module must render `pattern` from detail_pattern = { channel = [\"whatsapp\"] }) and tests/*/test_consumer_rule_pattern.py (EventBridge's TestEventPattern must accept `matching_event` and refuse `non_matching_event` against that same pattern).",
+  "pattern": {
+    "source": ["example.producer"],
+    "detail-type": ["learning.byte.completed"],
+    "detail": {"channel": ["whatsapp"]}
+  },
+  "matching_event": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "version": "0",
+    "account": "111111111111",
+    "region": "eu-west-1",
+    "time": "2026-11-02T12:00:00Z",
+    "resources": [],
+    "source": "example.producer",
+    "detail-type": "learning.byte.completed",
+    "detail": {"channel": "whatsapp", "id": "ev-1"}
+  },
+  "non_matching_event": {
+    "id": "00000000-0000-0000-0000-000000000002",
+    "version": "0",
+    "account": "111111111111",
+    "region": "eu-west-1",
+    "time": "2026-11-02T12:00:00Z",
+    "resources": [],
+    "source": "example.producer",
+    "detail-type": "learning.byte.completed",
+    "detail": {"channel": "email", "id": "ev-2"}
+  }
+}

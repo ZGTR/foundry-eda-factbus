@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from factbus.once import CertainlyNotSent, KeyReused, StillPending, Unknown, once
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0a1"
 
 _EXPORTS = {
     "Event": "factbus.envelope",

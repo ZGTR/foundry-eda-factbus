@@ -1,5 +1,6 @@
 """Migration 0001 creates the outbox table; inbox 0001 creates a consumer's inbox and
-applied-version tables. Both frozen; a later change is a new migration.
+applied-version tables; claims 0001 creates the table behind `SqlClaimStore`. All
+frozen; a later change is a new migration.
 
 A service's own Alembic chain owns its revision ids, so this module ships the DDL as
 functions a revision calls:
@@ -12,7 +13,8 @@ functions a revision calls:
 The columns are written out here rather than derived from `outbox_table`, because a
 migration that follows the live table definition rewrites history the day the table
 changes. `tests/integration/test_sql_outbox.py` reflects the migrated table on both
-engines and compares it with `outbox_table`, so the two cannot drift silently.
+engines and compares it with `outbox_table`, so the two cannot drift silently; the
+inbox and claims suites do the same for theirs.
 """
 
 from __future__ import annotations
@@ -21,9 +23,17 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 from factbus.adapters.sql import DEFAULT_TABLE_NAME
+from factbus.adapters.sql_claims import DEFAULT_CLAIMS_TABLE_NAME
 from factbus.adapters.sql_inbox import DEFAULT_INBOX_TABLE_NAME, DEFAULT_VERSIONS_TABLE_NAME
 
-__all__ = ["downgrade_0001", "downgrade_inbox_0001", "upgrade_0001", "upgrade_inbox_0001"]
+__all__ = [
+    "downgrade_0001",
+    "downgrade_claims_0001",
+    "downgrade_inbox_0001",
+    "upgrade_0001",
+    "upgrade_claims_0001",
+    "upgrade_inbox_0001",
+]
 
 _TIMESTAMP = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
 
@@ -77,3 +87,24 @@ def downgrade_inbox_0001(
 ) -> None:
     op.drop_table(versions_name)
     op.drop_table(inbox_name)
+
+
+def upgrade_claims_0001(op, table_name: str = DEFAULT_CLAIMS_TABLE_NAME) -> None:
+    """The `once` claim table. Rows are kept until `SqlClaimStore.purge` removes them."""
+    op.create_table(
+        table_name,
+        sa.Column("claim_key", sa.String(255), primary_key=True),
+        sa.Column("state", sa.String(16), nullable=False),
+        sa.Column("owner", sa.String(64), nullable=False),
+        sa.Column("deadline", _TIMESTAMP, nullable=False),
+        sa.Column("digest", sa.String(255), nullable=True),
+        sa.Column("result", sa.Text().with_variant(mysql.MEDIUMTEXT(), "mysql"), nullable=True),
+        sa.Column("created_at", _TIMESTAMP, nullable=False),
+        sa.Column("expires_at", _TIMESTAMP, nullable=False),
+    )
+    op.create_index(f"ix_{table_name}_created_at", table_name, ["created_at"])
+
+
+def downgrade_claims_0001(op, table_name: str = DEFAULT_CLAIMS_TABLE_NAME) -> None:
+    op.drop_index(f"ix_{table_name}_created_at", table_name=table_name)
+    op.drop_table(table_name)

@@ -97,8 +97,15 @@ deadline turns it into `unknown` without calling. The guarantee: at most one att
 that might have taken effect, per key, while the row is retained. Retention must
 outlive every replay window (queue plus DLQ retention plus any archive replay).
 
-Claims live in the consumer's inbox table under `claim#<key>`, so one table per
-consumer holds inbox, version and claim items.
+With `DynamoClaimStore`, claims live in the consumer's inbox table under `claim#<key>`,
+so one table per consumer holds inbox, version and claim items. `SqlClaimStore` keeps
+them in one SQL table (`upgrade_claims_0001`) with the same contract: the claim is an
+insert that does nothing on an existing key (`ON CONFLICT DO NOTHING` on PostgreSQL,
+`ON DUPLICATE KEY UPDATE claim_key = claim_key` with an owner read-back on MySQL), then a
+takeover only of a row past its `expires_at`; `settle` and `release` are updates and
+deletes conditional on owner and `pending`. Both engines are proved in
+`tests/integration/test_sql_claims.py`, including the claim race and a crash after the
+claim.
 
 Inside a consumer, an `Unknown` raised by `once` fails the message like any other error,
 so it retries with backoff (each retry raises `Unknown` again without calling) and
@@ -109,6 +116,15 @@ reaches the DLQ after about 9.7 h. The DLQ alarm is how an operator learns of it
 One rule: **inbox and claim retention must exceed every way an old event can come
 back.** Defaults: inbox and `once` keep 35 days. Queue and DLQ keep 14 days each (28 in
 total). The bus archive keeps 30 days and refuses 35 or more.
+
+The consumer enforces the rule itself rather than trusting every replay path: it refuses
+an event older than `max_event_age` (30 days) before it reads the inbox, and reports it
+as a batch item failure, so it backs off and reaches the DLQ like any other failure. The
+age counts from the earliest timestamp the event carries (EventBridge `time`, envelope
+`time` or `occurred_at`); an event with none is malformed. SQL tables are not expired by
+TTL, so `SqlInbox.purge` and `SqlClaimStore.purge` delete rows older than 35 days in
+bounded batches; the five days between the two limits are the margin. A claim row whose
+own `once` retention is longer than the purge window is kept.
 
 ## Decision index
 
@@ -132,6 +148,7 @@ total). The bus archive keeps 30 days and refuses 35 or more.
 | P2, P3 | LocalStack 3.8's v2 EventBridge provider supports archive and replay | measured locally |
 | P10 | `PutEvents` responses can carry fewer entries than sent; the kit does not assume one per entry. The SDK's own retries are off | `test_outbox_domain` |
 | P11 | `PutEvents` to a missing bus answers 200 | `test_eventbridge_localstack` |
+| R1-AGE | An event older than `max_event_age` (30 days) is refused before the inbox; inbox and claim rows are purged only after 35 days | `test_consume` (age arms), `test_sql_claims` (purge during consumption) |
 | R6-4 | Publish after commit and before the response: Lambda freezes the environment once the response returns | `test_publish_and_sweep` |
 | R7-26 | A permanent content reject is `failed` and never retried | `test_publish_and_sweep` |
 | X3 | Scaled backoff exists for tests only and says so | `BackoffSchedule.is_real` |

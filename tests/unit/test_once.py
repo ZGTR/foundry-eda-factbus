@@ -1,7 +1,9 @@
-"""`factbus.once` against both claim stores: the same suite, the same semantics.
+"""`factbus.once` against every claim store: the same suite, the same semantics.
 
 DynamoDB runs under moto's `mock_aws`, which honours condition expressions, so the
 conditional writes that carry the guarantee are exercised rather than stubbed.
+`SqlClaimStore` runs on in-memory SQLite (its `ON CONFLICT DO NOTHING` path); the
+PostgreSQL and MySQL paths, and concurrency, are proved in tests/integration.
 """
 
 from __future__ import annotations
@@ -11,9 +13,12 @@ from datetime import timedelta
 import boto3
 import pytest
 from moto import mock_aws
+from sqlalchemy import MetaData, create_engine
+from sqlalchemy.pool import StaticPool
 
 from factbus.adapters.dynamodb_claims import DynamoClaimStore
 from factbus.adapters.memory import MemoryClaimStore
+from factbus.adapters.sql_claims import SqlClaimStore, claims_table
 from factbus.domain.claims import Claim, ClaimState
 from factbus.once import CertainlyNotSent, KeyReused, StillPending, Unknown, once
 from tests.support import T0, ManualClock
@@ -22,10 +27,17 @@ TABLE = "claims"
 KEY = "org-1#welcome#u-42"
 
 
-@pytest.fixture(params=["memory", "dynamodb"])
+@pytest.fixture(params=["memory", "dynamodb", "sql"])
 def store(request):
     if request.param == "memory":
         yield MemoryClaimStore()
+        return
+    if request.param == "sql":
+        engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+        table = claims_table(MetaData(), TABLE)
+        table.create(engine)
+        yield SqlClaimStore(engine, table)
+        engine.dispose()
         return
     with mock_aws():
         client = boto3.client("dynamodb", region_name="eu-west-1")
