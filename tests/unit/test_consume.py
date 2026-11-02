@@ -288,6 +288,19 @@ def test_an_eventbridge_time_alone_does_not_date_the_event(aged):
     assert inbox.calls == [] and metrics.counts["ConsumerMalformed"] == 1
 
 
+def test_an_envelope_dated_in_the_future_is_malformed(aged):
+    """A future stamp would make a later replay look young after its inbox row was
+    purged (review finding, PR #10). A few minutes of clock skew is still accepted."""
+    consumer, inbox, _, _, metrics, clock = aged
+    ahead = sqs_record(envelope(1, occurred_at=(clock() + timedelta(days=7)).isoformat()), message_id="m-ahead")
+    skewed = sqs_record(envelope(2, occurred_at=(clock() + timedelta(minutes=4)).isoformat()), message_id="m-skew")
+
+    report = consumer.process_batch([ahead, skewed])
+
+    assert report.failed == ["m-ahead"] and report.applied == ["m-skew"] and report.expired == []
+    assert inbox.calls == ["evt-00002"] and metrics.counts["ConsumerMalformed"] == 1
+
+
 def test_the_age_limit_is_configurable_and_must_be_positive():
     clock, inbox = ManualClock(), SpyInbox()
 

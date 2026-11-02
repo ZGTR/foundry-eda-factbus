@@ -58,10 +58,12 @@ PURGE_BATCH_SIZE = 1000
 RESULT_TEXT = Text().with_variant(mysql.MEDIUMTEXT(), "mysql")
 
 #: Keys compare byte for byte. MySQL's default utf8mb4 collation ignores case, so
-#: `tenant-A#x` and `tenant-a#x` would share one claim and one cached result.
+#: `tenant-A#x` and `tenant-a#x` would share one claim and one cached result, and
+#: `utf8mb4_bin` is PAD SPACE (`'k' = 'k '`). `utf8mb4_0900_bin` (MySQL 8.0.17+) is
+#: NO PAD and case-sensitive.
 #: PostgreSQL and SQLite already compare `=` and primary keys bytewise by default.
 CLAIM_KEY_TYPE = String(KEY_LENGTH).with_variant(
-    mysql.VARCHAR(KEY_LENGTH, charset="utf8mb4", collation="utf8mb4_bin"), "mysql"
+    mysql.VARCHAR(KEY_LENGTH, charset="utf8mb4", collation="utf8mb4_0900_bin"), "mysql"
 )
 
 _SUPPORTED_DIALECTS = ("postgresql", "mysql", "sqlite")

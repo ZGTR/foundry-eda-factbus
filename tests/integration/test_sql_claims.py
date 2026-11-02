@@ -190,7 +190,8 @@ def test_the_same_key_with_a_different_digest_is_refused(claims_world):
 
 
 def test_keys_that_differ_only_in_case_are_separate_claims(claims_world):
-    """MySQL's default collation ignores case; claim keys must not (review finding, PR #10)."""
+    """MySQL's default collation ignores case and `utf8mb4_bin` ignores trailing spaces;
+    claim keys must do neither (review findings, PR #10)."""
     engine, store, table, clock = claims_world
     calls = []
 
@@ -199,10 +200,10 @@ def test_keys_that_differ_only_in_case_are_separate_claims(claims_world):
         calls.append(key)
         return f"sent-{key}"
 
-    assert send("tenant-A#user") == "sent-tenant-A#user"
-    assert send("tenant-a#user") == "sent-tenant-a#user"
-    assert calls == ["tenant-A#user", "tenant-a#user"]
-    assert _keys(engine, table) == {"tenant-A#user", "tenant-a#user"}
+    keys = ["tenant-A#user", "tenant-a#user", "tenant-a#user "]
+    assert [send(key) for key in keys] == [f"sent-{key}" for key in keys]
+    assert calls == keys
+    assert _keys(engine, table) == set(keys)
 
 
 def test_settle_and_release_are_conditional_on_the_holder(claims_world):

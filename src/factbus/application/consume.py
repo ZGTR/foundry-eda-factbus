@@ -13,6 +13,8 @@ Per record, in order:
    reported with backoff; after the queue's `maxReceiveCount` it reaches the DLQ (F9).
    An envelope without its own readable `time` or `occurred_at` is malformed too: its
    age is unknown, and EventBridge `time` alone is reset when the same id is re-put.
+   So is an envelope dated more than `MAX_CLOCK_SKEW` in the future: it would make
+   every later replay look young.
 3. Refuse an event older than `max_event_age` (default 30 days) BEFORE the inbox is
    read. Inbox and claim rows are purged after 35 days, so an older replay could meet a
    key whose row is gone and apply again; refused, it is reported with backoff and
@@ -86,6 +88,10 @@ EXPIRED_METRIC = "ConsumerExpired"
 
 #: The oldest event the consumer applies; see step 3 above and `factbus.domain.MAX_EVENT_AGE`.
 DEFAULT_MAX_EVENT_AGE = MAX_EVENT_AGE
+
+#: How far in the future an envelope's own timestamp may be before the record is
+#: malformed. Small next to the 5 days between `MAX_EVENT_AGE` and `ROW_RETENTION`.
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 #: The longest one item blocks for its provider slot. A batch runs its items in turn, so
 #: `batch_size / instance rate` plus the effects' own time must fit inside the function
@@ -178,7 +184,7 @@ class Consumer:
 
     def _consume_one(self, record: Mapping[str, object], delivery: _Delivery, report: BatchReport) -> None:
         try:
-            event, published_at = _consumed_event(record, delivery)
+            event, published_at = _consumed_event(record, delivery, self._clock())
             subject = self._version_of(event.envelope) if self._version_of else None
         except (MalformedRecord, KeyError, TypeError, ValueError) as error:
             self._metrics.count(MALFORMED_METRIC)
@@ -299,7 +305,7 @@ def _timestamp(value: object) -> datetime | None:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def _published_at(body: Mapping[str, object], detail: Mapping[str, object]) -> datetime:
+def _published_at(body: Mapping[str, object], detail: Mapping[str, object], now: datetime) -> datetime:
     """The earliest readable timestamp the event carries (see step 3 above)."""
     # The envelope's own stamp is required: EventBridge `time` alone is not stable, since a
     # re-put of the same event id gets a fresh one and would pass the age check after its
@@ -307,11 +313,17 @@ def _published_at(body: Mapping[str, object], detail: Mapping[str, object]) -> d
     own = [moment for moment in (_timestamp(detail.get("time")), _timestamp(detail.get("occurred_at"))) if moment]
     if not own:
         raise MalformedRecord("the envelope carries no readable time or occurred_at")
+    if min(own) > now + MAX_CLOCK_SKEW:
+        # A future stamp would make every later replay look young, so a re-put after
+        # the inbox row's purge would pass the age check and apply again.
+        raise MalformedRecord(f"the envelope is dated {min(own) - now} in the future")
     transport = _timestamp(body.get("time"))
     return min([*own, transport] if transport is not None else own)
 
 
-def _consumed_event(record: Mapping[str, object], delivery: _Delivery) -> tuple[ConsumedEvent, datetime]:
+def _consumed_event(
+    record: Mapping[str, object], delivery: _Delivery, now: datetime
+) -> tuple[ConsumedEvent, datetime]:
     body = record.get("body")
     if not isinstance(body, str):
         raise MalformedRecord("record body is not a string")
@@ -332,4 +344,4 @@ def _consumed_event(record: Mapping[str, object], delivery: _Delivery) -> tuple[
         message_id=delivery.message_id,
         receive_count=delivery.receive_count,
     )
-    return event, _published_at(parsed, detail)
+    return event, _published_at(parsed, detail, now)

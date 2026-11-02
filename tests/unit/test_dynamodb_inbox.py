@@ -192,7 +192,7 @@ def test_constructor_and_builder(client, clock):
 
 def _cloud_event(event_id: str, version: int, **data) -> dict:
     return Event(type="example.widget.changed", source="widgets", subject="w-1", id=event_id,
-                 data=data, extensions={"authorityepoch": version}).to_envelope()
+                 data=data, extensions={"authorityepoch": version}, time=T0.isoformat()).to_envelope()
 
 
 def test_consumer_drives_the_dynamo_inbox_end_to_end(client, inbox, clock):

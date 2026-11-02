@@ -8,7 +8,7 @@ import pytest
 from factbus.application import Consumer
 from factbus.domain import BackoffSchedule, EnvelopeKeyMissing, envelope_keys
 from factbus.envelope import Event
-from tests.support import CountingMetrics, ManualClock, MemoryInbox, ScriptedVisibility, envelope, sqs_record
+from tests.support import T0, CountingMetrics, ManualClock, MemoryInbox, ScriptedVisibility, envelope, sqs_record
 
 
 def cloud_event(n: int) -> dict:
@@ -18,6 +18,7 @@ def cloud_event(n: int) -> dict:
         source="example.producer",
         subject=f"byte-{n}",
         data={"score": n},
+        time=T0.isoformat(),  # the consumer's ManualClock starts at T0
     ).to_envelope()
 
 
