@@ -11,7 +11,8 @@ Per record, in order:
    A record without them cannot be reported item by item, so the whole batch fails.
 2. Parse the EventBridge body and take `detail.event_id`. A malformed record is
    reported with backoff; after the queue's `maxReceiveCount` it reaches the DLQ (F9).
-   A record that carries no readable timestamp is malformed too: its age is unknown.
+   An envelope without its own readable `time` or `occurred_at` is malformed too: its
+   age is unknown, and EventBridge `time` alone is reset when the same id is re-put.
 3. Refuse an event older than `max_event_age` (default 30 days) BEFORE the inbox is
    read. Inbox and claim rows are purged after 35 days, so an older replay could meet a
    key whose row is gone and apply again; refused, it is reported with backoff and
@@ -300,11 +301,14 @@ def _timestamp(value: object) -> datetime | None:
 
 def _published_at(body: Mapping[str, object], detail: Mapping[str, object]) -> datetime:
     """The earliest readable timestamp the event carries (see step 3 above)."""
-    stamps = [_timestamp(body.get("time")), _timestamp(detail.get("time")), _timestamp(detail.get("occurred_at"))]
-    known = [moment for moment in stamps if moment is not None]
-    if not known:
-        raise MalformedRecord("the event carries no readable time, occurred_at or EventBridge time")
-    return min(known)
+    # The envelope's own stamp is required: EventBridge `time` alone is not stable, since a
+    # re-put of the same event id gets a fresh one and would pass the age check after its
+    # inbox row was purged. EventBridge `time` still counts when it is the earliest.
+    own = [moment for moment in (_timestamp(detail.get("time")), _timestamp(detail.get("occurred_at"))) if moment]
+    if not own:
+        raise MalformedRecord("the envelope carries no readable time or occurred_at")
+    transport = _timestamp(body.get("time"))
+    return min([*own, transport] if transport is not None else own)
 
 
 def _consumed_event(record: Mapping[str, object], delivery: _Delivery) -> tuple[ConsumedEvent, datetime]:

@@ -189,6 +189,22 @@ def test_the_same_key_with_a_different_digest_is_refused(claims_world):
     assert calls == ["a@x"]
 
 
+def test_keys_that_differ_only_in_case_are_separate_claims(claims_world):
+    """MySQL's default collation ignores case; claim keys must not (review finding, PR #10)."""
+    engine, store, table, clock = claims_world
+    calls = []
+
+    @once(lambda key: key, store, clock=clock)
+    def send(key: str) -> str:
+        calls.append(key)
+        return f"sent-{key}"
+
+    assert send("tenant-A#user") == "sent-tenant-A#user"
+    assert send("tenant-a#user") == "sent-tenant-a#user"
+    assert calls == ["tenant-A#user", "tenant-a#user"]
+    assert _keys(engine, table) == {"tenant-A#user", "tenant-a#user"}
+
+
 def test_settle_and_release_are_conditional_on_the_holder(claims_world):
     _, store, _, clock = claims_world
     _guard(store, clock, lambda to: "ok")("a@x")

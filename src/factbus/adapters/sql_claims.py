@@ -57,6 +57,13 @@ PURGE_BATCH_SIZE = 1000
 
 RESULT_TEXT = Text().with_variant(mysql.MEDIUMTEXT(), "mysql")
 
+#: Keys compare byte for byte. MySQL's default utf8mb4 collation ignores case, so
+#: `tenant-A#x` and `tenant-a#x` would share one claim and one cached result.
+#: PostgreSQL and SQLite already compare `=` and primary keys bytewise by default.
+CLAIM_KEY_TYPE = String(KEY_LENGTH).with_variant(
+    mysql.VARCHAR(KEY_LENGTH, charset="utf8mb4", collation="utf8mb4_bin"), "mysql"
+)
+
 _SUPPORTED_DIALECTS = ("postgresql", "mysql", "sqlite")
 
 
@@ -64,7 +71,7 @@ def claims_table(metadata: MetaData, name: str = DEFAULT_CLAIMS_TABLE_NAME) -> T
     return Table(
         name,
         metadata,
-        Column("claim_key", String(KEY_LENGTH), primary_key=True),
+        Column("claim_key", CLAIM_KEY_TYPE, primary_key=True),
         Column("state", String(16), nullable=False),
         Column("owner", String(64), nullable=False),
         Column("deadline", TIMESTAMP, nullable=False),

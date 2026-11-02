@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 from factbus.adapters.sql import DEFAULT_TABLE_NAME
-from factbus.adapters.sql_claims import DEFAULT_CLAIMS_TABLE_NAME
+from factbus.adapters.sql_claims import CLAIM_KEY_TYPE, DEFAULT_CLAIMS_TABLE_NAME
 from factbus.adapters.sql_inbox import DEFAULT_INBOX_TABLE_NAME, DEFAULT_VERSIONS_TABLE_NAME
 
 __all__ = [
@@ -93,7 +93,7 @@ def upgrade_claims_0001(op, table_name: str = DEFAULT_CLAIMS_TABLE_NAME) -> None
     """The `once` claim table. Rows are kept until `SqlClaimStore.purge` removes them."""
     op.create_table(
         table_name,
-        sa.Column("claim_key", sa.String(255), primary_key=True),
+        sa.Column("claim_key", CLAIM_KEY_TYPE, primary_key=True),
         sa.Column("state", sa.String(16), nullable=False),
         sa.Column("owner", sa.String(64), nullable=False),
         sa.Column("deadline", _TIMESTAMP, nullable=False),

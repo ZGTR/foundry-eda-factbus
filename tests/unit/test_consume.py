@@ -272,6 +272,22 @@ def test_an_event_without_a_readable_timestamp_is_malformed(aged):
     assert inbox.calls == [] and metrics.counts["ConsumerMalformed"] == 1
 
 
+def test_an_eventbridge_time_alone_does_not_date_the_event(aged):
+    """A re-put of the same id gets a fresh EventBridge `time`; trusting it alone would let
+    a replay past the purge horizon apply again (review finding, PR #10)."""
+    consumer, inbox, _, _, metrics, clock = aged
+    undated = {key: value for key, value in envelope(1).items() if key != "occurred_at"}
+    record = sqs_record(undated, message_id="m1")
+    body = json.loads(record["body"])
+    body["time"] = clock().isoformat()
+    record["body"] = json.dumps(body)
+
+    report = consumer.process_batch([record])
+
+    assert report.failed == ["m1"] and report.applied == [] and report.expired == []
+    assert inbox.calls == [] and metrics.counts["ConsumerMalformed"] == 1
+
+
 def test_the_age_limit_is_configurable_and_must_be_positive():
     clock, inbox = ManualClock(), SpyInbox()
 
