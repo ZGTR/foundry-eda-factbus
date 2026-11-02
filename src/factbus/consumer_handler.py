@@ -31,12 +31,12 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from factbus.adapters.emf_metrics import EmfMetrics
 from factbus.adapters.sqs_visibility import build_sqs_visibility
-from factbus.application.consume import Consumer
+from factbus.application.consume import DEFAULT_MAX_EVENT_AGE, Consumer
 from factbus.domain import BackoffSchedule, ConsumedEvent, VersionOf
 from factbus.envelope import Event
 from factbus.ports import Inbox, Metrics, VisibilityChanger
@@ -76,12 +76,15 @@ def consumer(
     metrics: Metrics | None = None,
     visibility: Callable[[str], VisibilityChanger] | None = None,
     service: str = "consumer",
+    max_event_age: timedelta = DEFAULT_MAX_EVENT_AGE,
 ) -> Callable[[Handler], Callable[[Mapping[str, Any], Any], dict[str, list[dict[str, str]]]]]:
     """Wrap `fn(event, tx)` as an SQS-triggered Lambda handler.
 
     `inbox` is an `Inbox` or a zero-argument factory, called on the first batch so no
     client is built at import time. `visibility` builds the visibility adapter from a
     queue ARN (tests inject a double); by default it is derived from the record.
+    `max_event_age` refuses older events before the inbox is read (keep it below the
+    inbox's retention; see `factbus.application.consume`).
     """
     wanted = frozenset(types) if types is not None else None
 
@@ -120,6 +123,7 @@ def consumer(
                 clock=_utc_now,
                 metrics=metrics or EmfMetrics(sys.stdout, namespace="factbus", service=service),
                 version_of=guarded_version_of if version_of is not None else None,
+                max_event_age=max_event_age,
             )
 
         def handler(event: Mapping[str, Any], _context: Any) -> dict[str, list[dict[str, str]]]:

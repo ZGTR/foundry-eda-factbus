@@ -35,6 +35,21 @@ variable "event_types" {
   }
 }
 
+variable "detail_pattern" {
+  description = <<-EOT
+    Optional EventBridge pattern on the event's `detail`, merged into the rule beside
+    `source` and `detail-type`, for example `{ channel = ["whatsapp"] }`. Values follow
+    EventBridge pattern syntax (lists of allowed values, nested objects, content filters).
+    Null, the default, matches on source and detail-type only.
+  EOT
+  type        = any
+  default     = null
+  validation {
+    condition     = var.detail_pattern == null || try(length(keys(var.detail_pattern)) > 0, false)
+    error_message = "detail_pattern must be null or a non-empty object of detail fields."
+  }
+}
+
 variable "function_arn" {
   description = "The Lambda function that drains the queue (ARN or name). May be empty only while `create_event_source_mapping` is false."
   type        = string

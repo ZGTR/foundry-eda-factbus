@@ -2,7 +2,7 @@
 
 from factbus.domain.backoff import MAX_VISIBILITY_SECONDS, REAL_WAITS_SECONDS, BackoffSchedule
 from factbus.domain.breaker import ProviderBreaker
-from factbus.domain.consumed import ConsumedEvent, InboxOutcome
+from factbus.domain.consumed import MAX_EVENT_AGE, ROW_RETENTION, ConsumedEvent, InboxOutcome
 from factbus.domain.outbox import (
     CLOUDEVENTS_KEYS,
     ENVELOPE_KEYS,
@@ -26,7 +26,9 @@ from factbus.domain.rate_guard import TokenBucket, instance_rate
 from factbus.domain.versions import SubjectVersion, VersionOf, is_newer, status_advances
 
 __all__ = [
+    "MAX_EVENT_AGE",
     "MAX_VISIBILITY_SECONDS",
+    "ROW_RETENTION",
     "REAL_WAITS_SECONDS",
     "BackoffSchedule",
     "ConsumedEvent",

@@ -41,6 +41,20 @@ module "ledger" {
 Pass the consumer function `FACTBUS_INBOX_TABLE = module.ledger.inbox_table_name`. That
 single table holds the inbox, the applied versions and `once` claims.
 
+To narrow a consumer to part of a type's traffic, set `detail_pattern`. It is merged
+into the rule beside `source` and `detail-type` as the pattern's `detail`, in EventBridge
+pattern syntax:
+
+```hcl
+module "whatsapp_sender" {
+  # ... as above ...
+  event_types    = ["message.requested"]
+  detail_pattern = { channel = ["whatsapp"] }   # an event with channel = "email" never reaches this queue
+}
+```
+
+Null, the default, leaves the rule on `source` and `detail-type` only.
+
 ## Local and production
 
 | | Local | Production |

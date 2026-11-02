@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run the kit's unit and integration suites on every SQLAlchemy version it supports.
+# Run the kit's unit and integration suites on every SQLAlchemy version it supports,
+# plus the SQL claim store's (`SqlClaimStore`, behind `once`) tests as named arms.
 #
 # Adopters run SQLAlchemy 1.4.36 and 2.0. A kit tested on 2.0 alone imported `Engine`
 # from top-level `sqlalchemy`, which exists on 2.0 only, and failed to import inside a
@@ -85,6 +86,10 @@ for leg in "${LEGS[@]}"; do
     continue
   fi
   run_arm "$leg" "unit" "$venv/bin/python" -m pytest -q -p no:cacheprovider
+  # The claim store's own arms: already inside the suites above, run again by name so a
+  # leg that silently collected no claim test REFUSES (no pass count) instead of passing.
+  run_arm "$leg" "claims-unit" "$venv/bin/python" -m pytest -q -p no:cacheprovider \
+    tests/unit/test_sql_claims.py tests/unit/test_once.py -k "sql"
   if have_integration_urls; then
     pg_url="$FACTBUS_PG_URL"
     if [[ "$leg" == 1.4.* ]]; then
@@ -92,15 +97,18 @@ for leg in "${LEGS[@]}"; do
     fi
     run_arm "$leg" "integration" env FACTBUS_PG_URL="$pg_url" \
       "$venv/bin/python" -m pytest -q -p no:cacheprovider tests/integration
+    run_arm "$leg" "claims-integration" env FACTBUS_PG_URL="$pg_url" \
+      "$venv/bin/python" -m pytest -q -p no:cacheprovider tests/integration/test_sql_claims.py
   else
-    SKIPPED=$((SKIPPED + 1))
+    SKIPPED=$((SKIPPED + 2))
     SUMMARY+=("SKIP  sqlalchemy $leg  integration  engine URLs absent (see README)")
+    SUMMARY+=("SKIP  sqlalchemy $leg  claims-integration  engine URLs absent (see README)")
   fi
 done
 
 printf '%s\n' "${SUMMARY[@]}"
-TOTAL=$(( ${#LEGS[@]} * 2 ))
-echo "${#LEGS[@]} legs x 2 suites = $TOTAL arms; $RAN executed, $SKIPPED skipped, $FAILED failed, $REFUSED refused"
+TOTAL=$(( ${#LEGS[@]} * 4 ))
+echo "${#LEGS[@]} legs x 4 suites = $TOTAL arms; $RAN executed, $SKIPPED skipped, $FAILED failed, $REFUSED refused"
 if [[ $((RAN + SKIPPED + REFUSED)) -lt $TOTAL && $REFUSED -eq 0 ]]; then
   echo "REFUSE: arms unaccounted for"
   exit 2

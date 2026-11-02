@@ -65,6 +65,25 @@ def test_a_committed_row_is_published_after_commit(world):
     assert row is not None and row.sent_at is not None
 
 
+def test_an_undated_dict_envelope_is_stamped_at_staging(world):
+    """Consumers refuse an envelope with no timestamp of its own (review finding, PR #10),
+    so `stage` dates a dict envelope that has none, and leaves a dated one alone."""
+    engine, producer, bus, clock = world
+    legacy = {"event_id": "legacy-1", "type": "order.placed", "producer": "shop.orders", "data": {}}
+    cloud = {"specversion": "1.0", "id": "ce-1", "type": "order.placed", "source": "shop.orders", "data": {}}
+    dated = {**legacy, "event_id": "legacy-2", "occurred_at": "2026-01-01T00:00:00+00:00"}
+    with Session(engine) as session, session.begin():
+        for envelope in (legacy, cloud, dated):
+            producer.stage(session, envelope)
+
+    details = [json.loads(entry.detail) for call in bus.calls for entry in call]
+    assert [d.get("occurred_at") or d.get("time") for d in details] == [
+        clock().isoformat(), clock().isoformat(), "2026-01-01T00:00:00+00:00",
+    ]
+    assert "time" not in details[0] and "occurred_at" not in details[1]
+    assert "occurred_at" not in legacy  # the caller's dict is not mutated
+
+
 def test_a_rolled_back_transaction_publishes_nothing_and_leaves_no_row(world):
     engine, producer, bus, _ = world
     with pytest.raises(RuntimeError), Session(engine) as session, session.begin():

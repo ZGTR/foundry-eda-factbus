@@ -18,13 +18,19 @@ locals {
   inbox_table_name = coalesce(var.inbox_table_name, "${var.name}-inbox")
 }
 
+# `detail_pattern`, when set, narrows the rule on the event's `detail` (for example
+# `{ channel = ["whatsapp"] }`). Null leaves the pattern exactly as before: source and
+# detail-type only.
 resource "aws_cloudwatch_event_rule" "this" {
   name           = var.name
   event_bus_name = var.bus_name
-  event_pattern = jsonencode({
-    source        = var.sources
-    "detail-type" = var.event_types
-  })
+  event_pattern = jsonencode(merge(
+    {
+      source        = var.sources
+      "detail-type" = var.event_types
+    },
+    { for key, value in { detail = var.detail_pattern } : key => value if value != null },
+  ))
 }
 
 # Two failure boundaries, two DLQs. EventBridge retries a failed put to the queue (a

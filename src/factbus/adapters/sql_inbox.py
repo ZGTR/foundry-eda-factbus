@@ -16,16 +16,26 @@ PostgreSQL 16 and MySQL 8.0, one implementation (A14).
 5. commit. Anything raised by steps 3-5 rolls back the inbox row with the effect.
 
 The dedupe key is the envelope's `event_id`, never EventBridge's `id` (new on replay).
+
+`SqlInbox.purge` deletes inbox rows received before a cutoff (default 35 days), in
+bounded batches: a plain read of up to `batch_size` event ids, then a delete of exactly
+those ids that re-checks the cutoff. No range lock is held, so consumption carries on
+while a purge runs, and a row younger than the cutoff is never touched. Purging is safe
+only because the consumer refuses events older than `MAX_EVENT_AGE` (30 days) before it
+reads the inbox: no event it accepts can be a copy of one whose row is gone. The
+applied-version table is not purged; it holds one row per subject, not per event.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, MetaData, String, Table, insert, select, update
+from datetime import timedelta
+
+from sqlalchemy import BigInteger, Column, Index, MetaData, String, Table, delete, insert, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from factbus.adapters.sql import TIMESTAMP, _to_db
-from factbus.domain import ConsumedEvent, InboxOutcome, SubjectVersion, is_newer
+from factbus.domain import ROW_RETENTION, ConsumedEvent, InboxOutcome, SubjectVersion, is_newer
 from factbus.ports import Clock, Effect
 
 __all__ = [
@@ -38,6 +48,7 @@ __all__ = [
 
 DEFAULT_INBOX_TABLE_NAME = "factbus_inbox"
 DEFAULT_VERSIONS_TABLE_NAME = "factbus_applied_version"
+PURGE_BATCH_SIZE = 1000
 
 
 def inbox_table(metadata: MetaData, name: str = DEFAULT_INBOX_TABLE_NAME) -> Table:
@@ -46,6 +57,7 @@ def inbox_table(metadata: MetaData, name: str = DEFAULT_INBOX_TABLE_NAME) -> Tab
         metadata,
         Column("event_id", String(128), primary_key=True),
         Column("received_at", TIMESTAMP, nullable=False),
+        Index(f"ix_{name}_received_at", "received_at"),  # inbox migration 0002; serves `purge`
     )
 
 
@@ -95,6 +107,24 @@ class SqlInbox:
     def applied_version(self, subject_key: str) -> int | None:
         with self._engine.connect() as connection:
             return self._applied(connection, subject_key)
+
+    def purge(self, older_than: timedelta = ROW_RETENTION, *, batch_size: int = PURGE_BATCH_SIZE) -> int:
+        """Delete inbox rows received more than `older_than` ago. Returns the number
+        deleted. Each batch of at most `batch_size` rows is its own short transaction."""
+        if older_than <= timedelta(0):
+            raise ValueError("older_than must be positive")
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        table = self._inbox
+        old = table.c.received_at < _to_db(self._clock() - older_than)
+        deleted = 0
+        while True:
+            with self._engine.begin() as connection:
+                ids = [record.event_id for record in connection.execute(select(table.c.event_id).where(old).limit(batch_size))]
+                if ids:
+                    deleted += connection.execute(delete(table).where(table.c.event_id.in_(ids), old)).rowcount
+            if len(ids) < batch_size:
+                return deleted
 
     def _seen(self, connection, event_id: str) -> bool:
         query = select(self._inbox.c.event_id).where(self._inbox.c.event_id == event_id)

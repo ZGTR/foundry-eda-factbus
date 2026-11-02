@@ -11,8 +11,18 @@ from __future__ import annotations
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 
-__all__ = ["ConsumedEvent", "InboxOutcome"]
+__all__ = ["MAX_EVENT_AGE", "ROW_RETENTION", "ConsumedEvent", "InboxOutcome"]
+
+#: How long inbox and claim rows are kept before `purge` may delete them.
+ROW_RETENTION = timedelta(days=35)
+
+#: The oldest event a consumer applies, measured from the earliest timestamp the event
+#: carries. It sits below `ROW_RETENTION` so an event a consumer accepts can never meet
+#: an inbox or claim row that was already purged: a replay of anything older is refused
+#: before the inbox is read, rather than applied a second time.
+MAX_EVENT_AGE = timedelta(days=30)
 
 
 @dataclass(frozen=True)

@@ -11,17 +11,28 @@ Per record, in order:
    A record without them cannot be reported item by item, so the whole batch fails.
 2. Parse the EventBridge body and take `detail.event_id`. A malformed record is
    reported with backoff; after the queue's `maxReceiveCount` it reaches the DLQ (F9).
-3. While the provider breaker is open and no probe is due, report with backoff
+   An envelope without its own readable `time` or `occurred_at` is malformed too: its
+   age is unknown, and EventBridge `time` alone is reset when the same id is re-put.
+   So is an envelope dated more than `MAX_CLOCK_SKEW` in the future: it would make
+   every later replay look young.
+3. Refuse an event older than `max_event_age` (default 30 days) BEFORE the inbox is
+   read. Inbox and claim rows are purged after 35 days, so an older replay could meet a
+   key whose row is gone and apply again; refused, it is reported with backoff and
+   reaches the DLQ, where an operator sees it. The age is measured from the EARLIEST of
+   the EventBridge `time` and the envelope's own `time` (CloudEvents) or `occurred_at`
+   (legacy): every one of them precedes the first time any consumer could have
+   recorded the event, so the check never under-states how old the inbox row could be.
+4. While the provider breaker is open and no probe is due, report with backoff
    without calling anything.
-4. `Inbox.process`: dedupe, version guard, effect and inbox row in ONE transaction.
+5. `Inbox.process`: dedupe, version guard, effect and inbox row in ONE transaction.
    DUPLICATE and STALE are successes (C0b-17, K3) and need no provider slot.
-5. Immediately before the effect, take an available rate token (design §2).
+6. Immediately before the effect, take an available rate token (design §2).
    BLOCK and retry against a fresh clock until one is available. Blocking, not
    deferring, is the normal path: a deferral spends an `ApproximateReceiveCount`,
    so deferring a 10,000-item backlog would dead-letter it after 10 receives.
    If the wait exceeds `rate_max_wait`, roll back the inbox transaction and report
    backoff; the item is never dropped and no breaker probe has started.
-6. On any failure, set the message's visibility from the schedule and report it. If
+7. On any failure, set the message's visibility from the schedule and report it. If
    that call itself fails, the item is STILL reported (C0b-19): it then returns after
    the queue's default visibility, which only spends a receive sooner.
 
@@ -40,9 +51,10 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from factbus.domain import (
+    MAX_EVENT_AGE,
     BackoffSchedule,
     ConsumedEvent,
     InboxOutcome,
@@ -52,7 +64,14 @@ from factbus.domain import (
 )
 from factbus.ports import Clock, Effect, Inbox, Metrics, ProviderError, Sleep, VisibilityChanger
 
-__all__ = ["DEFAULT_RATE_MAX_WAIT", "BatchReport", "Consumer", "MalformedRecord", "TransportFieldsMissing"]
+__all__ = [
+    "DEFAULT_MAX_EVENT_AGE",
+    "DEFAULT_RATE_MAX_WAIT",
+    "BatchReport",
+    "Consumer",
+    "MalformedRecord",
+    "TransportFieldsMissing",
+]
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +84,14 @@ PROVIDER_ERROR_METRIC = "ConsumerProviderErrors"
 BREAKER_DEFERRED_METRIC = "ConsumerBreakerDeferred"
 VISIBILITY_FAILED_METRIC = "ConsumerVisibilityCallFailed"
 RATE_DEFERRED_METRIC = "ConsumerRateDeferred"
+EXPIRED_METRIC = "ConsumerExpired"
+
+#: The oldest event the consumer applies; see step 3 above and `factbus.domain.MAX_EVENT_AGE`.
+DEFAULT_MAX_EVENT_AGE = MAX_EVENT_AGE
+
+#: How far in the future an envelope's own timestamp may be before the record is
+#: malformed. Small next to the 5 days between `MAX_EVENT_AGE` and `ROW_RETENTION`.
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 #: The longest one item blocks for its provider slot. A batch runs its items in turn, so
 #: `batch_size / instance rate` plus the effects' own time must fit inside the function
@@ -99,6 +126,8 @@ class BatchReport:
     applied: list[str] = field(default_factory=list)
     duplicate: list[str] = field(default_factory=list)
     stale: list[str] = field(default_factory=list)
+    #: Refused as older than `max_event_age`; each is also in `failed`.
+    expired: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     visibility_failed: list[str] = field(default_factory=list)
     waits: dict[str, int] = field(default_factory=dict)
@@ -123,9 +152,12 @@ class Consumer:
         rate_guard: TokenBucket | None = None,
         rate_max_wait: timedelta = DEFAULT_RATE_MAX_WAIT,
         sleep: Sleep | None = None,
+        max_event_age: timedelta = DEFAULT_MAX_EVENT_AGE,
     ) -> None:
         if rate_guard is not None and sleep is None:
             raise ValueError("a rate guard blocks, so it needs `sleep` (time.sleep in production)")
+        if max_event_age <= timedelta(0):
+            raise ValueError("max_event_age must be positive")
         self._inbox = inbox
         self._visibility = visibility
         self._effect = effect
@@ -137,6 +169,7 @@ class Consumer:
         self._rate_guard = rate_guard
         self._rate_max_wait = rate_max_wait
         self._sleep = sleep
+        self._max_event_age = max_event_age
 
     def handle_batch(self, records: Sequence[Mapping[str, object]]) -> dict[str, list[dict[str, str]]]:
         """The Lambda handler's body: returns the `ReportBatchItemFailures` response."""
@@ -151,11 +184,22 @@ class Consumer:
 
     def _consume_one(self, record: Mapping[str, object], delivery: _Delivery, report: BatchReport) -> None:
         try:
-            event = _consumed_event(record, delivery)
+            event, published_at = _consumed_event(record, delivery, self._clock())
             subject = self._version_of(event.envelope) if self._version_of else None
         except (MalformedRecord, KeyError, TypeError, ValueError) as error:
             self._metrics.count(MALFORMED_METRIC)
             log.warning("malformed record %s: %s", delivery.message_id, error)
+            self._defer(delivery, report)
+            return
+
+        age = self._clock() - published_at
+        if age > self._max_event_age:
+            self._metrics.count(EXPIRED_METRIC)
+            log.warning(
+                "refused %s: %s old, past the %s age limit; its inbox row may be purged",
+                event.event_id, age, self._max_event_age,
+            )
+            report.expired.append(delivery.message_id)
             self._defer(delivery, report)
             return
 
@@ -251,7 +295,35 @@ def _delivery(record: Mapping[str, object]) -> _Delivery:
     return _Delivery(message_id, receipt_handle, receive_count)
 
 
-def _consumed_event(record: Mapping[str, object], delivery: _Delivery) -> ConsumedEvent:
+def _timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+
+def _published_at(body: Mapping[str, object], detail: Mapping[str, object], now: datetime) -> datetime:
+    """The earliest readable timestamp the event carries (see step 3 above)."""
+    # The envelope's own stamp is required: EventBridge `time` alone is not stable, since a
+    # re-put of the same event id gets a fresh one and would pass the age check after its
+    # inbox row was purged. EventBridge `time` still counts when it is the earliest.
+    own = [moment for moment in (_timestamp(detail.get("time")), _timestamp(detail.get("occurred_at"))) if moment]
+    if not own:
+        raise MalformedRecord("the envelope carries no readable time or occurred_at")
+    if min(own) > now + MAX_CLOCK_SKEW:
+        # A future stamp would make every later replay look young, so a re-put after
+        # the inbox row's purge would pass the age check and apply again.
+        raise MalformedRecord(f"the envelope is dated {min(own) - now} in the future")
+    transport = _timestamp(body.get("time"))
+    return min([*own, transport] if transport is not None else own)
+
+
+def _consumed_event(
+    record: Mapping[str, object], delivery: _Delivery, now: datetime
+) -> tuple[ConsumedEvent, datetime]:
     body = record.get("body")
     if not isinstance(body, str):
         raise MalformedRecord("record body is not a string")
@@ -266,9 +338,10 @@ def _consumed_event(record: Mapping[str, object], delivery: _Delivery) -> Consum
     event_id = detail.get(key)
     if not isinstance(event_id, str) or not event_id:
         raise MalformedRecord(f"detail.{key} is missing or empty")
-    return ConsumedEvent(
+    event = ConsumedEvent(
         event_id=event_id,
         envelope=detail,
         message_id=delivery.message_id,
         receive_count=delivery.receive_count,
     )
+    return event, _published_at(parsed, detail, now)

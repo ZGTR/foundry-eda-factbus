@@ -26,10 +26,12 @@ from factbus.adapters import (
     applied_versions_table,
     downgrade_0001,
     downgrade_inbox_0001,
+    downgrade_inbox_0002,
     inbox_table,
     outbox_table,
     upgrade_0001,
     upgrade_inbox_0001,
+    upgrade_inbox_0002,
 )
 from tests.support import ManualClock
 
@@ -75,12 +77,16 @@ def inbox_world(engine):
     suffix = uuid.uuid4().hex[:10]
     names = (f"ib_{suffix}", f"av_{suffix}")
     with engine.begin() as connection:
-        upgrade_inbox_0001(Operations(MigrationContext.configure(connection)), *names)
+        operations = Operations(MigrationContext.configure(connection))
+        upgrade_inbox_0001(operations, *names)
+        upgrade_inbox_0002(operations, names[0])
     metadata = MetaData()
     inbox, versions = inbox_table(metadata, names[0]), applied_versions_table(metadata, names[1])
     yield engine, SqlInbox(engine, inbox, versions, ManualClock()), inbox, versions
     with engine.begin() as connection:
-        downgrade_inbox_0001(Operations(MigrationContext.configure(connection)), *names)
+        operations = Operations(MigrationContext.configure(connection))
+        downgrade_inbox_0002(operations, names[0])
+        downgrade_inbox_0001(operations, *names)
 
 
 @pytest.fixture

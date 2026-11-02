@@ -2,6 +2,7 @@
 and how a consumer turns an SQS batch into effects."""
 
 from factbus.application.consume import (
+    DEFAULT_MAX_EVENT_AGE,
     DEFAULT_RATE_MAX_WAIT,
     BatchReport,
     Consumer,
@@ -16,6 +17,7 @@ from factbus.application.retention import SENT_RETENTION, purge_sent_rows
 from factbus.application.sweep import MAX_ROWS_PER_RUN, MIN_ROW_AGE, SweepReport, Sweeper
 
 __all__ = [
+    "DEFAULT_MAX_EVENT_AGE",
     "DEFAULT_RATE_MAX_WAIT",
     "MAX_ROWS_PER_RUN",
     "MIN_ROW_AGE",
