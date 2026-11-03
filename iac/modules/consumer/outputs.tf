@@ -1,5 +1,14 @@
 output "rule_arn" {
-  value = aws_cloudwatch_event_rule.this.arn
+  description = "The single rule's ARN. Null when `subscriptions` is set; read `rule_arns`."
+  value       = one(aws_cloudwatch_event_rule.this[*].arn)
+}
+
+output "rule_arns" {
+  description = "Every rule feeding the queue, by subscription key (the single rule's key is `name`)."
+  value = merge(
+    { for r in aws_cloudwatch_event_rule.this : var.name => r.arn },
+    { for key, r in aws_cloudwatch_event_rule.subscription : key => r.arn },
+  )
 }
 
 output "queue_arn" {

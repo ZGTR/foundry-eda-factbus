@@ -55,6 +55,29 @@ module "whatsapp_sender" {
 
 Null, the default, leaves the rule on `source` and `detail-type` only.
 
+A consumer that must hear several buses on one queue (one kill switch, one place that
+orders its own updates) sets `subscriptions`. Each entry becomes a rule named
+`<name>-<key>` on its own bus, with its own EventBridge pattern written as JSON, and
+every rule targets the same queue with the same retry policy and delivery DLQ. The
+queue's one policy, and the delivery DLQ's, admit exactly those rules:
+
+```hcl
+module "results" {
+  # ... name, function_arn, role_name, alarm_topic_arn as above; no bus_name, sources or event_types ...
+  subscriptions = [
+    { key = "results", bus_name = module.comms_bus.bus_name,
+      event_pattern = jsonencode({ source = [{ "anything-but" = ["comms-core"] }], "detail-type" = ["comms.delivery.accepted"] }) },
+    { key = "answers", bus_name = var.product_bus_name,
+      event_pattern = jsonencode({ source = ["shop.backend"], "detail-type" = ["product.action.completed"] }) },
+  ]
+}
+```
+
+Keys are stable names: adding or removing an entry leaves the other rules alone. Setting
+both forms, or neither, is refused at plan. A stack applied before `subscriptions`
+existed keeps its single rule and target (the module carries `moved` blocks to their new
+`[0]` addresses).
+
 ## Local and production
 
 | | Local | Production |
@@ -76,8 +99,8 @@ Null, the default, leaves the rule on `source` and `detail-type` only.
   reserved concurrency should set it at or below that reservation: otherwise the poller
   invokes past it, throttled batches return to the queue, and each return counts toward
   `max_receive_count`.
-- One bus per consumer module. A consumer of two buses instantiates the module twice,
-  once per bus, with distinct `name`s.
+- One queue, several buses: set `subscriptions` instead of `bus_name`, `sources` and
+  `event_types` (see below). Two queues for two buses is still two module calls.
 - A consumer's two DLQs mean different things. `<name>-delivery-dlq` holds events
   EventBridge could not put on the queue (queue policy, deleted or KMS-locked queue)
   after `delivery_max_retry_attempts` / `delivery_max_event_age_seconds` (defaults: the

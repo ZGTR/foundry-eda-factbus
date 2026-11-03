@@ -9,29 +9,65 @@ variable "name" {
 }
 
 variable "bus_name" {
-  description = "The EventBridge bus the producer publishes to (the `bus` module's `bus_name` output)."
+  description = "The EventBridge bus the producer publishes to (the `bus` module's `bus_name` output). Null only when `subscriptions` is set."
   type        = string
+  default     = null
   validation {
-    condition     = length(var.bus_name) > 0
+    condition     = var.bus_name == null || try(length(var.bus_name) > 0, false)
     error_message = "bus_name must not be empty: an empty name subscribes to the account's default bus."
   }
 }
 
 variable "sources" {
-  description = "CloudEvents `source` values this consumer accepts, matched against EventBridge `source`."
+  description = "CloudEvents `source` values this consumer accepts, matched against EventBridge `source`. Null only when `subscriptions` is set."
   type        = list(string)
+  default     = null
   validation {
-    condition     = length(var.sources) > 0
+    condition     = var.sources == null || try(length(var.sources) > 0, false)
     error_message = "sources: at least one; an empty list would match nothing."
   }
 }
 
 variable "event_types" {
-  description = "CloudEvents `type` values this consumer accepts, matched against EventBridge `detail-type`."
+  description = "CloudEvents `type` values this consumer accepts, matched against EventBridge `detail-type`. Null only when `subscriptions` is set."
   type        = list(string)
+  default     = null
   validation {
-    condition     = length(var.event_types) > 0
+    condition     = var.event_types == null || try(length(var.event_types) > 0, false)
     error_message = "event_types: at least one; an empty list would match nothing."
+  }
+}
+
+variable "subscriptions" {
+  description = <<-EOT
+    Several buses feeding ONE queue, in place of `bus_name`, `sources` and `event_types`.
+    Each entry becomes a rule named `<name>-<key>` on `bus_name` with `event_pattern` (a
+    JSON EventBridge pattern string, used as written), targeting this module's queue with
+    the same retry policy and delivery DLQ as the single rule. The queue and delivery DLQ
+    policies admit every entry's rule and nothing else. Empty, the default, keeps the
+    single-bus form.
+  EOT
+  type = list(object({
+    key           = string
+    bus_name      = string
+    event_pattern = string
+  }))
+  default = []
+  validation {
+    condition     = alltrue([for s in var.subscriptions : can(regex("^[A-Za-z0-9_-]{1,32}$", s.key))])
+    error_message = "subscriptions: each key is 1 to 32 letters, digits, '-' or '_' (it ends the rule name)."
+  }
+  validation {
+    condition     = length(distinct([for s in var.subscriptions : s.key])) == length(var.subscriptions)
+    error_message = "subscriptions: keys must be unique; two entries with one key would be one rule."
+  }
+  validation {
+    condition     = alltrue([for s in var.subscriptions : length(s.bus_name) > 0])
+    error_message = "subscriptions: bus_name must not be empty: an empty name subscribes to the account's default bus."
+  }
+  validation {
+    condition     = alltrue([for s in var.subscriptions : can(keys(jsondecode(s.event_pattern)))])
+    error_message = "subscriptions: event_pattern must be a JSON object (jsonencode an EventBridge pattern)."
   }
 }
 
