@@ -47,18 +47,18 @@ variables {
 run "rule_matches_sources_and_types_and_targets_the_queue" {
   command = plan
   assert {
-    condition = jsondecode(aws_cloudwatch_event_rule.this.event_pattern) == {
+    condition = jsondecode(aws_cloudwatch_event_rule.this[0].event_pattern) == {
       source        = ["example.producer"]
       "detail-type" = ["learning.byte.completed"]
     }
-    error_message = "the rule must match exactly the configured sources and detail-types: ${aws_cloudwatch_event_rule.this.event_pattern}"
+    error_message = "the rule must match exactly the configured sources and detail-types: ${aws_cloudwatch_event_rule.this[0].event_pattern}"
   }
   assert {
-    condition     = aws_cloudwatch_event_rule.this.event_bus_name == "example-events" && aws_cloudwatch_event_target.this.event_bus_name == "example-events"
+    condition     = aws_cloudwatch_event_rule.this[0].event_bus_name == "example-events" && aws_cloudwatch_event_target.this[0].event_bus_name == "example-events"
     error_message = "rule and target must be on bus_name"
   }
   assert {
-    condition     = aws_cloudwatch_event_target.this.arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+    condition     = aws_cloudwatch_event_target.this[0].arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
     error_message = "the rule must target this module's queue"
   }
 }
@@ -73,17 +73,17 @@ run "detail_pattern_is_merged_into_the_rule" {
     detail_pattern = { channel = ["whatsapp"] }
   }
   assert {
-    condition     = jsondecode(aws_cloudwatch_event_rule.this.event_pattern) == jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).pattern
-    error_message = "the rule must carry source, detail-type and the detail filter: ${aws_cloudwatch_event_rule.this.event_pattern}"
+    condition     = jsondecode(aws_cloudwatch_event_rule.this[0].event_pattern) == jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).pattern
+    error_message = "the rule must carry source, detail-type and the detail filter: ${aws_cloudwatch_event_rule.this[0].event_pattern}"
   }
   assert {
     condition = (
       contains(
-        jsondecode(aws_cloudwatch_event_rule.this.event_pattern).detail.channel,
+        jsondecode(aws_cloudwatch_event_rule.this[0].event_pattern).detail.channel,
         jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).matching_event.detail.channel,
       )
       && !contains(
-        jsondecode(aws_cloudwatch_event_rule.this.event_pattern).detail.channel,
+        jsondecode(aws_cloudwatch_event_rule.this[0].event_pattern).detail.channel,
         jsondecode(file("${path.module}/tests/fixtures/detail_pattern.json")).non_matching_event.detail.channel,
       )
     )
@@ -126,7 +126,7 @@ run "queue_policy_admits_only_the_rule" {
 run "failed_delivery_goes_to_the_delivery_dlq" {
   command = plan
   assert {
-    condition     = one(aws_cloudwatch_event_target.this.dead_letter_config).arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger-delivery-dlq"
+    condition     = one(aws_cloudwatch_event_target.this[0].dead_letter_config).arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger-delivery-dlq"
     error_message = "the target must dead-letter to this module's delivery DLQ"
   }
   assert {
@@ -135,8 +135,8 @@ run "failed_delivery_goes_to_the_delivery_dlq" {
   }
   assert {
     condition = (
-      one(aws_cloudwatch_event_target.this.retry_policy).maximum_retry_attempts == 185
-      && one(aws_cloudwatch_event_target.this.retry_policy).maximum_event_age_in_seconds == 86400
+      one(aws_cloudwatch_event_target.this[0].retry_policy).maximum_retry_attempts == 185
+      && one(aws_cloudwatch_event_target.this[0].retry_policy).maximum_event_age_in_seconds == 86400
     )
     error_message = "the target retry policy must default to the EventBridge maximum (185 attempts, 24 h)"
   }
@@ -172,8 +172,8 @@ run "delivery_retry_policy_follows_variables" {
   }
   assert {
     condition = (
-      one(aws_cloudwatch_event_target.this.retry_policy).maximum_retry_attempts == 0
-      && one(aws_cloudwatch_event_target.this.retry_policy).maximum_event_age_in_seconds == 60
+      one(aws_cloudwatch_event_target.this[0].retry_policy).maximum_retry_attempts == 0
+      && one(aws_cloudwatch_event_target.this[0].retry_policy).maximum_event_age_in_seconds == 60
     )
     error_message = "the retry policy must follow delivery_max_retry_attempts and delivery_max_event_age_seconds"
   }
@@ -267,7 +267,7 @@ run "kill_switch_disables_the_mapping_only" {
     error_message = "enabled = false must disable the event source mapping"
   }
   assert {
-    condition     = aws_sqs_queue.this.name == "event-ledger" && aws_cloudwatch_event_rule.this.name == "event-ledger"
+    condition     = aws_sqs_queue.this.name == "event-ledger" && aws_cloudwatch_event_rule.this[0].name == "event-ledger"
     error_message = "the kill switch must leave the queue and rule in place, so events wait rather than vanish"
   }
 }
@@ -293,7 +293,7 @@ run "without_the_mapping_the_queue_is_still_created_and_output" {
     condition = (
       output.queue_arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
       && aws_sqs_queue.this.name == "event-ledger"
-      && aws_cloudwatch_event_target.this.arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+      && aws_cloudwatch_event_target.this[0].arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
     )
     error_message = "the queue, its rule target and the queue_arn output must exist without the mapping"
   }
@@ -477,4 +477,171 @@ run "no_network_or_database_resources" {
     ]) && length(regexall("resource\\s+\"aws_dynamodb_table\"", file("${path.module}/main.tf"))) == 1
     error_message = "positive control: the scan must see the one resource type the module does declare"
   }
+}
+
+# --- subscriptions: several buses, one queue ----------------------------------------------
+# Notifications' results queue hears delivery results on its own bus and the product's
+# answers on the product's bus, with one kill switch. These runs apply against the mock
+# provider so the rules have ARNs. The mock gives every rule the same generated ARN (and
+# override_resource cannot target one instance), so the policy runs check one entry per
+# rule and that each entry is a rule ARN; the LocalStack apply in the notifications
+# module proves the distinct ARNs.
+
+run "subscriptions_make_one_rule_per_entry_on_its_own_bus" {
+  command = apply
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = jsonencode({ source = [{ "anything-but" = ["comms-core"] }], "detail-type" = ["comms.delivery.accepted"] }) },
+      { key = "answers", bus_name = "product-events", event_pattern = jsonencode({ source = ["product-backend"], "detail-type" = ["product.action.completed"] }) },
+    ]
+  }
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.this) == 0 && length(aws_cloudwatch_event_target.this) == 0 && output.rule_arn == null
+    error_message = "subscriptions must replace the single rule, not add to it"
+  }
+  assert {
+    condition = (
+      { for k, r in aws_cloudwatch_event_rule.subscription : k => [r.name, r.event_bus_name] }
+      == { results = ["event-ledger-results", "comms-events"], answers = ["event-ledger-answers", "product-events"] }
+    )
+    error_message = "each entry must be a rule named <name>-<key> on its own bus"
+  }
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_event_rule.subscription["results"].event_pattern) == { source = [{ "anything-but" = ["comms-core"] }], "detail-type" = ["comms.delivery.accepted"] }
+      && jsondecode(aws_cloudwatch_event_rule.subscription["answers"].event_pattern) == { source = ["product-backend"], "detail-type" = ["product.action.completed"] }
+    )
+    error_message = "each rule must carry its entry's pattern as written"
+  }
+  assert {
+    condition = alltrue([
+      for k, t in aws_cloudwatch_event_target.subscription :
+      t.arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger"
+      && t.event_bus_name == aws_cloudwatch_event_rule.subscription[k].event_bus_name
+      && one(t.dead_letter_config).arn == "arn:aws:sqs:eu-west-1:111111111111:event-ledger-delivery-dlq"
+      && one(t.retry_policy).maximum_retry_attempts == 185
+    ]) && length(aws_cloudwatch_event_target.subscription) == 2
+    error_message = "every rule must target the one queue on its own bus, with the delivery DLQ and retry policy"
+  }
+  assert {
+    condition     = output.rule_arns == { for k, r in aws_cloudwatch_event_rule.subscription : k => r.arn }
+    error_message = "rule_arns must name every subscription's rule by key"
+  }
+}
+
+run "one_queue_policy_admits_every_subscription_rule_and_nothing_else" {
+  command = apply
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["comms.delivery.accepted"] }) },
+      { key = "answers", bus_name = "product-events", event_pattern = jsonencode({ "detail-type" = ["product.action.completed"] }) },
+      { key = "inbound", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["comms.inbound.received"] }) },
+    ]
+  }
+  assert {
+    condition = (
+      length(jsondecode(aws_sqs_queue_policy.this.policy).Statement) == 1
+      && toset(one(jsondecode(aws_sqs_queue_policy.this.policy).Statement).Condition.ArnEquals["aws:SourceArn"])
+      == toset([for r in aws_cloudwatch_event_rule.subscription : r.arn])
+      && length(one(jsondecode(aws_sqs_queue_policy.this.policy).Statement).Condition.ArnEquals["aws:SourceArn"]) == 3
+      && one(jsondecode(aws_sqs_queue_policy.this.policy).Statement).Action == "sqs:SendMessage"
+      && !strcontains(aws_sqs_queue_policy.this.policy, "*")
+    )
+    error_message = "the queue's one policy must admit exactly the three rules: ${aws_sqs_queue_policy.this.policy}"
+  }
+  assert {
+    condition = (
+      length(jsondecode(aws_sqs_queue_policy.delivery_dlq.policy).Statement) == 1
+      && toset(one(jsondecode(aws_sqs_queue_policy.delivery_dlq.policy).Statement).Condition.ArnEquals["aws:SourceArn"])
+      == toset([for r in aws_cloudwatch_event_rule.subscription : r.arn])
+      && length(one(jsondecode(aws_sqs_queue_policy.delivery_dlq.policy).Statement).Condition.ArnEquals["aws:SourceArn"]) == 3
+    )
+    error_message = "the delivery DLQ policy must admit exactly the three rules: ${aws_sqs_queue_policy.delivery_dlq.policy}"
+  }
+}
+
+# Control for the two runs above: one rule keeps the string form, so the single-bus
+# policy is unchanged by `subscriptions` (queue_policy_admits_only_the_rule compares it
+# with the fixed rule ARN).
+run "one_subscription_keeps_the_string_condition" {
+  command = apply
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "only", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["comms.delivery.accepted"] }) },
+    ]
+  }
+  assert {
+    condition     = one(jsondecode(aws_sqs_queue_policy.this.policy).Statement).Condition.ArnEquals["aws:SourceArn"] == aws_cloudwatch_event_rule.subscription["only"].arn
+    error_message = "a single subscription must be admitted by its ARN as a string"
+  }
+}
+
+run "subscriptions_beside_the_single_bus_form_are_refused" {
+  command = plan
+  variables {
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["comms.delivery.accepted"] }) },
+    ]
+  }
+  expect_failures = [aws_sqs_queue.this]
+}
+
+run "neither_form_is_refused" {
+  command = plan
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+  }
+  expect_failures = [aws_sqs_queue.this]
+}
+
+run "duplicate_subscription_keys_are_refused" {
+  command = plan
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["a"] }) },
+      { key = "results", bus_name = "product-events", event_pattern = jsonencode({ "detail-type" = ["b"] }) },
+    ]
+  }
+  expect_failures = [var.subscriptions]
+}
+
+run "a_subscription_pattern_that_is_not_a_json_object_is_refused" {
+  command = plan
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = "detail-type=a" },
+    ]
+  }
+  expect_failures = [var.subscriptions]
+}
+
+run "a_subscription_rule_name_over_64_characters_is_refused" {
+  command = plan
+  variables {
+    name        = "a-consumer-name-that-is-forty-characters"
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "a-key-of-twenty-eight-chars-", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["a"] }) },
+    ]
+  }
+  expect_failures = [aws_cloudwatch_event_rule.subscription]
 }
