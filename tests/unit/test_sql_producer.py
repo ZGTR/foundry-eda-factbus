@@ -195,3 +195,23 @@ def test_attach_is_idempotent(world):
     with Session(engine) as session, session.begin():
         producer.stage(session, placed(1))
     assert sent_ids(bus) == ["ord-1"]  # published once, not once per attach
+
+
+def test_connect_requires_a_region_and_reads_no_environment(monkeypatch, tmp_path):
+    """The `us-east-1` default and the environment fallback are gone: a region in the
+    process environment does not stand in for the argument."""
+    import factbus.sql_producer as module
+
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+    engine = sqlite_engine(tmp_path / "connect.db")
+    with pytest.raises(TypeError, match="region_name"):
+        SqlProducer.connect(engine, bus_name="orders")
+    with pytest.raises(ValueError, match="region_name"):
+        SqlProducer.connect(engine, bus_name="orders", region_name="")
+
+    built = []
+    monkeypatch.setattr(module, "build_eventbridge_bus", lambda **kwargs: built.append(kwargs) or ScriptedBus())
+    producer = SqlProducer.connect(engine, bus_name="orders", region_name="ap-south-1", endpoint_url="http://localhost:4576")
+    assert isinstance(producer, SqlProducer)
+    assert built == [{"bus_name": "orders", "region_name": "ap-south-1", "endpoint_url": "http://localhost:4576"}]

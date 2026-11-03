@@ -66,7 +66,8 @@ reaches the DLQ in seconds. It is for tests only. Leave it unset anywhere real.
 
 LocalStack runs the function in a `public.ecr.aws/lambda/python:3.12` container via the
 Docker socket. The first run pulls that image. Inside the container LocalStack sets
-`AWS_ENDPOINT_URL`, and `handler.py` copies it to `FACTBUS_ENDPOINT_URL`.
+`AWS_ENDPOINT_URL`, and `handler.py` passes it to factbus as `endpoint_url`, because
+factbus reads no environment itself.
 
 ## What the e2e script checks
 

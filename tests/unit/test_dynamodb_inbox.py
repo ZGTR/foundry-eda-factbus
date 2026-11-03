@@ -239,25 +239,29 @@ def test_importing_the_dynamodb_inbox_does_not_import_sqlalchemy():
     assert result.returncode == 0, result.stderr
 
 
-def test_from_env_builds_an_inbox_on_the_named_table(client, monkeypatch):
-    monkeypatch.setenv("FACTBUS_INBOX_TABLE", TABLE)
-    monkeypatch.delenv("FACTBUS_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
-    built = DynamoInbox.from_env()
+def test_the_builder_takes_every_setting_as_an_argument(client, monkeypatch):
+    """factbus reads no environment: with the region and table variables unset, the
+    builder still builds on the named table from its arguments alone."""
+    for name in ("FACTBUS_INBOX_TABLE", "AWS_REGION", "AWS_DEFAULT_REGION", "FACTBUS_ENDPOINT_URL", "AWS_ENDPOINT_URL"):
+        monkeypatch.delenv(name, raising=False)
+    built = build_dynamo_inbox(table_name=TABLE, region_name=REGION)
     assert built.table_name == TABLE
+    assert built._client.meta.region_name == REGION
     writer = Writer()
-    assert built.process(_event("env-1"), subject=None, effect=writer) is InboxOutcome.APPLIED
-    assert _effect_items(client) == ["env-1"]
+    assert built.process(_event("arg-1"), subject=None, effect=writer) is InboxOutcome.APPLIED
+    assert _effect_items(client) == ["arg-1"]
 
 
-@pytest.mark.parametrize("missing", ["FACTBUS_INBOX_TABLE", "AWS_REGION"])
-def test_from_env_refuses_a_missing_setting(monkeypatch, missing):
-    monkeypatch.setenv("FACTBUS_INBOX_TABLE", TABLE)
-    monkeypatch.setenv("AWS_REGION", REGION)
-    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-    monkeypatch.delenv(missing)
+@pytest.mark.parametrize("missing", ["table_name", "region_name"])
+def test_the_builder_refuses_a_missing_setting(missing):
+    settings = {"table_name": TABLE, "region_name": REGION, missing: ""}
     with pytest.raises(ValueError, match=missing):
-        DynamoInbox.from_env()
+        build_dynamo_inbox(**settings)
+
+
+def test_the_builder_passes_the_endpoint_through():
+    built = build_dynamo_inbox(table_name=TABLE, region_name=REGION, endpoint_url="http://localhost:4576")
+    assert built._client.meta.endpoint_url == "http://localhost:4576"
 
 
 def test_an_effect_may_write_json_floats(client, inbox):

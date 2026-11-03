@@ -50,7 +50,6 @@ Construction happens in `build_dynamo_inbox`, called by a composition root.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -202,31 +201,6 @@ class DynamoInbox:
         self._retention = retention
         self._clock = clock
 
-    @classmethod
-    def from_env(
-        cls,
-        table_env: str = "FACTBUS_INBOX_TABLE",
-        *,
-        clock: Clock | None = None,
-        retention: timedelta = DEFAULT_INBOX_RETENTION,
-    ) -> DynamoInbox:
-        """Build from the Lambda environment: the table name from `table_env`, the region
-        from `AWS_REGION` (set by Lambda) or `AWS_DEFAULT_REGION`, and the endpoint from
-        `FACTBUS_ENDPOINT_URL` or `AWS_ENDPOINT_URL`, set only locally (LocalStack)."""
-        table_name = os.environ.get(table_env)
-        if not table_name:
-            raise ValueError(f"{table_env} is not set")
-        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-        if not region:
-            raise ValueError("AWS_REGION is not set")
-        return build_dynamo_inbox(
-            table_name=table_name,
-            region_name=region,
-            clock=clock or _utc_now,
-            retention=retention,
-            endpoint_url=os.environ.get("FACTBUS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL") or None,
-        )
-
     @property
     def table_name(self) -> str:
         return self._table
@@ -310,20 +284,25 @@ def build_dynamo_inbox(
     *,
     table_name: str,
     region_name: str,
-    clock: Clock,
+    clock: Clock | None = None,
     retention: timedelta = DEFAULT_INBOX_RETENTION,
     endpoint_url: str | None = None,
     session: boto3.session.Session | None = None,
 ) -> DynamoInbox:
-    """Build the adapter. `endpoint_url` is set locally (LocalStack) and left None in AWS,
-    where the function role's credentials and the region select the real table."""
+    """Build the adapter. Every setting is an argument: factbus reads no environment, so
+    the caller's own configuration names the table, the region and, locally (LocalStack),
+    `endpoint_url`, which stays None in AWS. `clock` defaults to UTC now."""
+    if not table_name:
+        raise ValueError("table_name is required")
+    if not region_name:
+        raise ValueError("region_name is required")
     client = (session or boto3.session.Session()).client(
         "dynamodb",
         region_name=region_name,
         endpoint_url=endpoint_url,
         config=DYNAMODB_CLIENT_CONFIG,
     )
-    return DynamoInbox(client, table_name, retention=retention, clock=clock)
+    return DynamoInbox(client, table_name, retention=retention, clock=clock or _utc_now)
 
 
 _SERIALISER = TypeSerializer()

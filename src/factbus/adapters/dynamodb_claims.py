@@ -21,7 +21,6 @@ The client the GUARDED FUNCTION uses is a different matter; see `factbus.once`.
 from __future__ import annotations
 
 import math
-import os
 from datetime import UTC, datetime
 
 import botocore.exceptions
@@ -29,7 +28,7 @@ import botocore.exceptions
 from factbus.domain.claims import Claim, ClaimState
 from factbus.ports import ClaimStoreError
 
-__all__ = ["DynamoClaimStore"]
+__all__ = ["DynamoClaimStore", "build_dynamo_claim_store"]
 
 _CONDITION_FAILED = "ConditionalCheckFailedException"
 
@@ -51,28 +50,6 @@ class DynamoClaimStore:
             raise ValueError("table_name is required")
         self._client = client
         self._table = table_name
-
-    @classmethod
-    def from_env(cls, table_env: str = "FACTBUS_INBOX_TABLE") -> DynamoClaimStore:
-        """Build on the inbox table named by `table_env`, in `AWS_REGION`, with
-        `FACTBUS_ENDPOINT_URL` or `AWS_ENDPOINT_URL` set only locally (LocalStack)."""
-        import boto3
-
-        from factbus.adapters.dynamodb_inbox import DYNAMODB_CLIENT_CONFIG
-
-        table_name = os.environ.get(table_env)
-        if not table_name:
-            raise ValueError(f"{table_env} is not set")
-        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-        if not region:
-            raise ValueError("AWS_REGION is not set")
-        client = boto3.session.Session().client(
-            "dynamodb",
-            region_name=region,
-            endpoint_url=os.environ.get("FACTBUS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL") or None,
-            config=DYNAMODB_CLIENT_CONFIG,
-        )
-        return cls(client, table_name)
 
     @property
     def table_name(self) -> str:
@@ -159,3 +136,30 @@ class DynamoClaimStore:
         except botocore.exceptions.BotoCoreError as error:
             raise ClaimStoreError(str(error)) from error
         return True
+
+
+def build_dynamo_claim_store(
+    *,
+    table_name: str,
+    region_name: str,
+    endpoint_url: str | None = None,
+    session=None,
+) -> DynamoClaimStore:
+    """Build the store on the consumer's inbox table. Every setting is an argument:
+    factbus reads no environment. `endpoint_url` is set locally (LocalStack) and left
+    None in AWS."""
+    import boto3
+
+    from factbus.adapters.dynamodb_inbox import DYNAMODB_CLIENT_CONFIG
+
+    if not table_name:
+        raise ValueError("table_name is required")
+    if not region_name:
+        raise ValueError("region_name is required")
+    client = (session or boto3.session.Session()).client(
+        "dynamodb",
+        region_name=region_name,
+        endpoint_url=endpoint_url,
+        config=DYNAMODB_CLIENT_CONFIG,
+    )
+    return DynamoClaimStore(client, table_name)

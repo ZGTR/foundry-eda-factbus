@@ -126,3 +126,33 @@ def test_a_filtered_type_does_not_advance_the_subject_version():
     handler({"Records": [rec("foreign", "other.thing", 5)]}, None)
     handler({"Records": [rec("real", "wanted.thing", 5)]}, None)
     assert seen == ["real"]
+
+
+@pytest.mark.parametrize(
+    ("endpoint_url", "queue_url"),
+    [
+        (None, "https://sqs.eu-west-1.amazonaws.com/123456789012/ledger"),
+        ("http://localhost:4576", "http://localhost:4576/123456789012/ledger"),
+    ],
+)
+def test_the_default_visibility_uses_the_endpoint_argument_not_the_environment(monkeypatch, endpoint_url, queue_url):
+    """factbus reads no environment: a LocalStack endpoint in the process environment
+    changes nothing; only the `endpoint_url` argument does."""
+    import factbus.consumer_handler as module
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://env-should-be-ignored:1")
+    monkeypatch.setenv("FACTBUS_ENDPOINT_URL", "http://env-should-be-ignored:2")
+    built = []
+
+    def fake_build(**kwargs):
+        built.append(kwargs)
+        return ScriptedVisibility()
+
+    monkeypatch.setattr(module, "build_sqs_visibility", fake_build)
+
+    @consumer(inbox=MemoryInbox(), metrics=CountingMetrics(), endpoint_url=endpoint_url)
+    def handler(event, tx):
+        return None
+
+    handler({"Records": [record(1)]}, None)
+    assert built == [{"queue_url": queue_url, "region_name": "eu-west-1", "endpoint_url": endpoint_url}]

@@ -6,7 +6,7 @@ lines across eight files): insert the row on the caller's session, remember whic
 the transaction staged, publish them once the transaction commits, forget them if it
 rolls back, and run a sweeper on a schedule. This module is that glue, once.
 
-    producer = SqlProducer.connect(engine, bus_name="orders")
+    producer = SqlProducer.connect(engine, bus_name="orders", region_name="eu-west-1")
     producer.attach()                                  # once, at startup
 
     with Session(engine) as session, session.begin():
@@ -98,18 +98,19 @@ class SqlProducer:
         engine: Engine,
         *,
         bus_name: str,
-        region_name: str | None = None,
+        region_name: str,
         endpoint_url: str | None = None,
         service: str = "producer",
         **options: Any,
     ) -> SqlProducer:
-        """Build the EventBridge adapter and the producer. `endpoint_url` is set locally
-        (LocalStack) and left None in AWS. `region_name` None reads the environment."""
-        import os
-
+        """Build the EventBridge adapter and the producer. factbus reads no environment:
+        `region_name` is required, and `endpoint_url` is set locally (LocalStack) and left
+        None in AWS."""
+        if not region_name:
+            raise ValueError("region_name is required")
         bus = build_eventbridge_bus(
             bus_name=bus_name,
-            region_name=region_name or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+            region_name=region_name,
             endpoint_url=endpoint_url,
         )
         options.setdefault("metrics", EmfMetrics(sys.stdout, namespace="factbus", service=service))

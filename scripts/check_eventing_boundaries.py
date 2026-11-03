@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""factbus's architecture gate: nine clauses over `src/factbus`, read with `ast`.
+"""factbus's architecture gate: ten clauses over `src/factbus`, read with `ast`.
 
 WHY THIS GATE CARRIES LAYERING. The kit's design meant to reuse a service kit's
 `check_layering.py` and `check_size_limits.py` (assumption A7). Measured on this
@@ -32,6 +32,10 @@ Clauses (a finding names the clause, file and line):
    `asyncio.sleep`). The rate guard's wait goes through the injected `Sleep` port, so a
    test runs a paced batch without waiting and the composition root decides what
    blocking means.
+10. Any module reads the process environment (`os.environ`, `os.getenv`, `os.putenv`,
+   or the same names imported from `os`). factbus takes every setting (region, endpoint,
+   table names) as an argument, so a service's one typed settings object stays the only
+   reader of its environment (notifications design plan, slice F1).
 
 Before any verdict on the real tree, the gate runs its fixtures: every offending
 fixture must produce exactly the finding for its own clause and nothing else, and the
@@ -57,7 +61,7 @@ SOURCE = ROOT / "src"
 FIXTURES = ROOT / "scripts" / "gate_fixtures" / "eventing_boundaries"
 PACKAGE = "factbus"
 
-CLAUSES = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+CLAUSES = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 SDK_ROOTS = frozenset({"boto3", "botocore"})
 INNER_FORBIDDEN_ROOTS = SDK_ROOTS | frozenset({"sqlalchemy", "alembic", "psycopg", "pymysql"})
@@ -77,6 +81,7 @@ CLOCK_MODULES = frozenset({"datetime", "date", "time"})
 CLOCK_CALLS = frozenset({"now", "utcnow", "today", "time", "time_ns", "monotonic", "monotonic_ns", "perf_counter"})
 SLEEP_MODULES = frozenset({"time", "asyncio"})
 INNER_LAYERS = frozenset({"domain", "ports", "application"})
+ENV_NAMES = frozenset({"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"})
 
 #: Floors on the production scan. A scan that saw nothing reports a clean tree it never
 #: read. Hand-written.
@@ -96,6 +101,7 @@ EXPECTED_OFFENDERS = {
     "c7_domain_imports_application": 7,
     "c8_domain_reads_clock": 8,
     "c9_application_sleeps": 9,
+    "c10_reads_environment": 10,
 }
 
 
@@ -168,6 +174,22 @@ def _sleeps(call: ast.Call) -> bool:
     )
 
 
+def _reads_environment(node: ast.AST) -> str | None:
+    """`os.environ`, `os.getenv(...)` and the like; `request.environ` is not the process's."""
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    ):
+        return f"os.{node.attr}"
+    if isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0:
+        names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES)
+        if names:
+            return f"from os import {', '.join(names)}"
+    return None
+
+
 def _adapter_classes(package_root: Path) -> set[str]:
     names: set[str] = set()
     for module in (package_root / "adapters").rglob("*.py"):
@@ -230,6 +252,9 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(8, node.lineno, "domain reads a clock; take `now` as a parameter")
             if layer in INNER_LAYERS and isinstance(node, ast.Call) and _sleeps(node):
                 add(9, node.lineno, f"{layer} blocks the thread itself; take a `Sleep` port")
+            env_read = _reads_environment(node)
+            if env_read:
+                add(10, node.lineno, f"reads the environment ({env_read}); take the setting as an argument")
             if isinstance(node, ast.Call) and _call_name(node) == "client":
                 stats.client_constructions += 1
                 if not any(k.arg == "config" for k in node.keywords):

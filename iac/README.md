@@ -38,8 +38,9 @@ module "ledger" {
 }
 ```
 
-Pass the consumer function `FACTBUS_INBOX_TABLE = module.ledger.inbox_table_name`. That
-single table holds the inbox, the applied versions and `once` claims.
+Pass the consumer function `FACTBUS_INBOX_TABLE = module.ledger.inbox_table_name` and give
+that value to `build_dynamo_inbox(table_name=...)`. That single table holds the inbox, the
+applied versions and `once` claims.
 
 To narrow a consumer to part of a type's traffic, set `detail_pattern`. It is merged
 into the rule beside `source` and `detail-type` as the pattern's `detail`, in EventBridge
@@ -83,7 +84,7 @@ existed keeps its single rule and target (the module carries `moved` blocks to t
 | | Local | Production |
 | --- | --- | --- |
 | Provider | `endpoints { events = sqs = dynamodb = lambda = iam = sts = cloudwatch = logs = "http://localhost:4576" }`, `skip_credentials_validation`, `skip_requesting_account_id`, `access_key = secret_key = "test"` | no `endpoints` block; region and the deploy role select the account |
-| Function env | nothing extra: LocalStack sets `AWS_ENDPOINT_URL` in its Lambda containers and factbus uses it (`FACTBUS_ENDPOINT_URL` overrides) | unset |
+| Function env | nothing extra: LocalStack sets `AWS_ENDPOINT_URL` in its Lambda containers; the handler passes it to factbus as `endpoint_url` (factbus reads no environment) | unset |
 | Proof | `make e2e` (see `examples/hello`) | the same example applied to a sandbox account |
 
 ## Known limits

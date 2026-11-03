@@ -219,14 +219,14 @@ def test_options_that_cannot_hold_the_guarantee_are_refused(store):
 def test_claims_share_the_inbox_table_without_colliding(monkeypatch, clock):
     """One consumer table holds inbox, version and claim items: an event id used as a
     `once` key does not read as an inbox record, and the reverse."""
-    from factbus.adapters.dynamodb_inbox import DynamoInbox
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+    from factbus.adapters.dynamodb_inbox import build_dynamo_inbox
     from factbus.domain import ConsumedEvent, InboxOutcome
 
-    for name, value in {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing",
-                        "AWS_REGION": "eu-west-1", "FACTBUS_INBOX_TABLE": TABLE}.items():
+    for name, value in {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing"}.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.delenv("FACTBUS_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    for name in ("AWS_REGION", "AWS_DEFAULT_REGION", "FACTBUS_INBOX_TABLE", "FACTBUS_ENDPOINT_URL", "AWS_ENDPOINT_URL"):
+        monkeypatch.delenv(name, raising=False)
     with mock_aws():
         boto3.client("dynamodb", region_name="eu-west-1").create_table(
             TableName=TABLE,
@@ -235,7 +235,8 @@ def test_claims_share_the_inbox_table_without_colliding(monkeypatch, clock):
                                   {"AttributeName": "sk", "AttributeType": "S"}],
             BillingMode="PAY_PER_REQUEST",
         )
-        inbox, claims = DynamoInbox.from_env(clock=clock), DynamoClaimStore.from_env()
+        inbox = build_dynamo_inbox(table_name=TABLE, region_name="eu-west-1", clock=clock)
+        claims = build_dynamo_claim_store(table_name=TABLE, region_name="eu-west-1")
         calls = []
 
         @once(key=lambda event_id: event_id, store=claims, clock=clock)
@@ -249,3 +250,12 @@ def test_claims_share_the_inbox_table_without_colliding(monkeypatch, clock):
         assert inbox.process(consumed, subject=None, effect=lambda tx, e: None) is InboxOutcome.DUPLICATE
         assert send("ev-1") == "sent" and calls == ["ev-1"]
         assert claims.read("ev-1").key == "ev-1"
+
+
+@pytest.mark.parametrize("missing", ["table_name", "region_name"])
+def test_the_claim_store_builder_refuses_a_missing_setting(missing):
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+
+    settings = {"table_name": TABLE, "region_name": "eu-west-1", missing: ""}
+    with pytest.raises(ValueError, match=missing):
+        build_dynamo_claim_store(**settings)

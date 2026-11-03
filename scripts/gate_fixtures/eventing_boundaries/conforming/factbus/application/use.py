@@ -10,3 +10,8 @@ def paced(items, wait, sleep):
     for item in items:
         sleep(wait)
         yield item
+
+
+def remote_user(request):
+    """The conforming shape: a request's own `environ` is not the process environment."""
+    return request.environ.get("REMOTE_USER")
