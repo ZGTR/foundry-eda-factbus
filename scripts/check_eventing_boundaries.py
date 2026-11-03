@@ -174,15 +174,27 @@ def _sleeps(call: ast.Call) -> bool:
     )
 
 
-def _reads_environment(node: ast.AST) -> str | None:
-    """`os.environ`, `os.getenv(...)` and the like; `request.environ` is not the process's."""
+def _os_aliases(tree: ast.AST) -> set[str]:
+    """Every name bound to the `os` module: `import os`, `import os as anything`."""
+    return {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "os"
+    }
+
+
+def _reads_environment(node: ast.AST, os_names: set[str]) -> str | None:
+    """`os.environ`, `os.getenv(...)` (under any alias of `os`) and the same names imported
+    from `os`; `request.environ` is not the process's."""
     if (
         isinstance(node, ast.Attribute)
         and node.attr in ENV_NAMES
         and isinstance(node.value, ast.Name)
-        and node.value.id == "os"
+        and node.value.id in os_names
     ):
-        return f"os.{node.attr}"
+        return f"{node.value.id}.{node.attr}"
     if isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0:
         names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES)
         if names:
@@ -244,6 +256,7 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(7, line, f"{layer} imports {name}, an SDK or ORM")
 
         docstrings = _docstring_nodes(tree)
+        os_names = _os_aliases(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 if EVENT_TYPE.match(node.value):
@@ -252,7 +265,7 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(8, node.lineno, "domain reads a clock; take `now` as a parameter")
             if layer in INNER_LAYERS and isinstance(node, ast.Call) and _sleeps(node):
                 add(9, node.lineno, f"{layer} blocks the thread itself; take a `Sleep` port")
-            env_read = _reads_environment(node)
+            env_read = _reads_environment(node, os_names)
             if env_read:
                 add(10, node.lineno, f"reads the environment ({env_read}); take the setting as an argument")
             if isinstance(node, ast.Call) and _call_name(node) == "client":

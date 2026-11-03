@@ -274,3 +274,29 @@ def test_an_effect_may_write_json_floats(client, inbox):
     assert inbox.process(_event("f"), subject=None, effect=effect) is InboxOutcome.APPLIED
     item = client.get_item(TableName=TABLE, Key={"pk": {"S": "fx#f"}, "sk": {"S": "fx"}})["Item"]
     assert item["total"] == {"N": "19.99"} and item["lines"]["L"][0]["M"]["p"] == {"N": "0.1"}
+
+
+def test_no_builder_takes_an_endpoint_from_the_environment(monkeypatch):
+    """boto3 alone would read AWS_ENDPOINT_URL when `endpoint_url` is None (dev-review
+    probe, 3 November). Every factbus client ignores it. Positive control: a plain boto3
+    client built the same way does pick the variable up."""
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+    from factbus.adapters.eventbridge import build_eventbridge_bus
+    from factbus.adapters.sqs_visibility import build_sqs_visibility
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://env-should-be-ignored:1")
+    control = boto3.session.Session().client("dynamodb", region_name=REGION)
+    assert control.meta.endpoint_url == "http://env-should-be-ignored:1"
+
+    clients = [
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+        build_eventbridge_bus(bus_name="b", region_name=REGION)._client,
+        build_sqs_visibility(queue_url="https://sqs.us-east-1.amazonaws.com/1/q", region_name=REGION)._client,
+    ]
+    assert [c.meta.endpoint_url for c in clients] == [
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://events.{REGION}.amazonaws.com",
+        f"https://sqs.{REGION}.amazonaws.com",
+    ]

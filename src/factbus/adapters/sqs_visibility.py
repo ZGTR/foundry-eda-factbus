@@ -27,6 +27,9 @@ SQS_CLIENT_CONFIG = Config(
     retries={"total_max_attempts": 2, "mode": "standard"},
     connect_timeout=2,
     read_timeout=5,
+    # factbus reads no environment, and neither may its clients: without this, boto3
+    # takes AWS_ENDPOINT_URL (or a config-file endpoint) when `endpoint_url` is None.
+    ignore_configured_endpoint_urls=True,
 )
 
 

@@ -42,3 +42,14 @@ def test_clause_10_finds_no_environment_read_in_src_and_flags_one_when_present(t
                       encoding="utf-8")
     flagged, _ = gate.analyse(copy)
     assert [(f.clause, f.path) for f in flagged if f.clause == 10] == [(10, "factbus/sql_producer.py")]
+
+
+def test_clause_10_sees_through_an_aliased_os_import(tmp_path):
+    package = tmp_path / "src" / "factbus"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "settings.py").write_text(
+        'import os as settings\n\n\ndef region():\n    return settings.getenv("AWS_REGION")\n', encoding="utf-8"
+    )
+    flagged, _ = gate.analyse(tmp_path / "src")
+    assert [(f.clause, f.line) for f in flagged] == [(10, 5)]
