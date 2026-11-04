@@ -300,3 +300,31 @@ def test_no_builder_takes_an_endpoint_from_the_environment(monkeypatch):
         f"https://events.{REGION}.amazonaws.com",
         f"https://sqs.{REGION}.amazonaws.com",
     ]
+
+
+def test_no_builder_takes_an_endpoint_variant_from_the_environment(monkeypatch):
+    """AWS_USE_FIPS_ENDPOINT and AWS_USE_DUALSTACK_ENDPOINT also pick the host in boto3
+    (dev-review round 2, Medium). Every factbus client ignores both. Positive control: a
+    plain boto3 client built the same way moves to the FIPS dual-stack host."""
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+    from factbus.adapters.eventbridge import build_eventbridge_bus
+    from factbus.adapters.sqs_visibility import build_sqs_visibility
+
+    monkeypatch.setenv("AWS_USE_FIPS_ENDPOINT", "true")
+    monkeypatch.setenv("AWS_USE_DUALSTACK_ENDPOINT", "true")
+    control = boto3.session.Session().client("sqs", region_name=REGION)
+    assert control.meta.endpoint_url != f"https://sqs.{REGION}.amazonaws.com"
+    assert "fips" in control.meta.endpoint_url
+
+    clients = [
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+        build_eventbridge_bus(bus_name="b", region_name=REGION)._client,
+        build_sqs_visibility(queue_url="https://sqs.us-east-1.amazonaws.com/1/q", region_name=REGION)._client,
+    ]
+    assert [c.meta.endpoint_url for c in clients] == [
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://events.{REGION}.amazonaws.com",
+        f"https://sqs.{REGION}.amazonaws.com",
+    ]

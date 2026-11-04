@@ -91,6 +91,11 @@ DYNAMODB_CLIENT_CONFIG = Config(
     # factbus reads no environment, and neither may its clients: without this, boto3
     # takes AWS_ENDPOINT_URL (or a config-file endpoint) when `endpoint_url` is None.
     ignore_configured_endpoint_urls=True,
+    # The same holds for the endpoint variants: AWS_USE_FIPS_ENDPOINT and
+    # AWS_USE_DUALSTACK_ENDPOINT would otherwise pick a different host. A caller that
+    # needs one passes it as `endpoint_url`.
+    use_fips_endpoint=False,
+    use_dualstack_endpoint=False,
 )
 
 _CONDITION_FAILED = "ConditionalCheckFailed"
