@@ -60,7 +60,7 @@ See [`iac/README.md`](iac/README.md).
 from sqlalchemy.orm import Session
 from factbus import Event, SqlProducer
 
-producer = SqlProducer.connect(engine, bus_name="events")
+producer = SqlProducer.connect(engine, bus_name="events", region_name="eu-west-1")
 producer.attach()                                   # once, at startup
 
 with Session(engine) as session, session.begin():
@@ -81,14 +81,24 @@ SQLAlchemy 1.4.36+ and 2.0.
 
 ```python
 import os
+from functools import partial
 from factbus import Event, consumer
-from factbus.adapters.dynamodb_inbox import DynamoInbox
+from factbus.adapters.dynamodb_inbox import build_dynamo_inbox
 
-@consumer(inbox=DynamoInbox.from_env, types=["order.placed"])
+TABLE, REGION = os.environ["FACTBUS_INBOX_TABLE"], os.environ["AWS_REGION"]
+
+@consumer(inbox=partial(build_dynamo_inbox, table_name=TABLE, region_name=REGION),
+          types=["order.placed"])
 def handler(event: Event, tx) -> None:
-    tx.put(os.environ["FACTBUS_INBOX_TABLE"],          # JSON floats are stored as exact decimals
+    tx.put(TABLE,                                       # JSON floats are stored as exact decimals
            {"pk": f"order#{event.subject}", "sk": "ledger", "total": event.data["total"]})
 ```
+
+factbus reads no environment: your configuration names the table, the region and,
+locally, `endpoint_url` (LocalStack), which `build_dynamo_inbox` and `consumer` both take.
+Its AWS clients ignore the environment's endpoint settings too (`AWS_ENDPOINT_URL`,
+FIPS, dual-stack and DynamoDB account-ID endpoints). Credentials, proxies and CA bundles
+still come from the standard AWS chain.
 
 `handler` is the Lambda entry point. Your writes through `tx` commit in one DynamoDB
 transaction with the inbox record, so a redelivered or replayed event changes nothing.
@@ -99,9 +109,9 @@ after 10 receives.
 
 ```python
 from factbus import once
-from factbus.adapters.dynamodb_claims import DynamoClaimStore
+from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
 
-claims = DynamoClaimStore.from_env()                # same table as the inbox
+claims = build_dynamo_claim_store(table_name=TABLE, region_name=REGION)  # same table as the inbox
 
 @once(key=lambda event: f"welcome#{event.subject}", store=claims)
 def send_welcome(event):
@@ -236,6 +246,21 @@ see [`docs/design.md`](docs/design.md).
 
 Envelopes are CloudEvents 1.0 (`id`, `type`, `source`, `subject`, `data`), carried as
 the EventBridge `detail`.
+
+## Upgrading from a release that read the environment
+
+These changed in one step, and only the first two fail loudly:
+
+- `DynamoInbox.from_env` and `DynamoClaimStore.from_env` are gone. Use
+  `build_dynamo_inbox(table_name=..., region_name=..., endpoint_url=...)` and
+  `build_dynamo_claim_store(...)`, for example through `functools.partial` as `consumer`'s
+  `inbox`.
+- `SqlProducer.connect`, `build_eventbridge_bus` and `build_sqs_visibility` require
+  `region_name`; the `us-east-1` default is gone.
+- `FACTBUS_ENDPOINT_URL` and `AWS_ENDPOINT_URL` are no longer read. A LocalStack run passes
+  `endpoint_url` to the inbox builder **and** to `@consumer(...)`. Without the second,
+  the consumer's SQS visibility client goes to real AWS, and the mistake shows only when a
+  message needs a backoff.
 
 ## Status
 

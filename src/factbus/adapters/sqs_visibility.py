@@ -27,6 +27,14 @@ SQS_CLIENT_CONFIG = Config(
     retries={"total_max_attempts": 2, "mode": "standard"},
     connect_timeout=2,
     read_timeout=5,
+    # factbus reads no environment, and neither may its clients: without this, boto3
+    # takes AWS_ENDPOINT_URL (or a config-file endpoint) when `endpoint_url` is None.
+    ignore_configured_endpoint_urls=True,
+    # The same holds for the endpoint variants: AWS_USE_FIPS_ENDPOINT and
+    # AWS_USE_DUALSTACK_ENDPOINT would otherwise pick a different host. A caller that
+    # needs one passes it as `endpoint_url`.
+    use_fips_endpoint=False,
+    use_dualstack_endpoint=False,
 )
 
 
@@ -60,6 +68,8 @@ def build_sqs_visibility(
     """Build the adapter. `endpoint_url` is set locally (LocalStack) and left None in AWS,
     where the function role's credentials and the region select the real queue. The
     queue URL comes from service config (the IaC module outputs it)."""
+    if not region_name:
+        raise ValueError("region_name is required")
     client = (session or boto3.session.Session()).client(
         "sqs",
         region_name=region_name,

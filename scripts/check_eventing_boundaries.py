@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""factbus's architecture gate: nine clauses over `src/factbus`, read with `ast`.
+"""factbus's architecture gate: ten clauses over `src/factbus`, read with `ast`.
 
 WHY THIS GATE CARRIES LAYERING. The kit's design meant to reuse a service kit's
 `check_layering.py` and `check_size_limits.py` (assumption A7). Measured on this
@@ -32,6 +32,12 @@ Clauses (a finding names the clause, file and line):
    `asyncio.sleep`). The rate guard's wait goes through the injected `Sleep` port, so a
    test runs a paced batch without waiting and the composition root decides what
    blocking means.
+10. Any module reads the process environment (`os.environ`, `os.getenv`, `os.putenv`,
+   `os.path.expandvars`/`expanduser`, the same names imported from `os` or `os.path`, a
+   star import of either, `posix`/`nt` and `posixpath`/`ntpath`, under any alias,
+   `import os.path [as p]` and `from os import path` included). factbus takes every setting (region, endpoint,
+   table names) as an argument, so a service's one typed settings object stays the only
+   reader of its environment (notifications design plan, slice F1).
 
 Before any verdict on the real tree, the gate runs its fixtures: every offending
 fixture must produce exactly the finding for its own clause and nothing else, and the
@@ -57,7 +63,7 @@ SOURCE = ROOT / "src"
 FIXTURES = ROOT / "scripts" / "gate_fixtures" / "eventing_boundaries"
 PACKAGE = "factbus"
 
-CLAUSES = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+CLAUSES = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 SDK_ROOTS = frozenset({"boto3", "botocore"})
 INNER_FORBIDDEN_ROOTS = SDK_ROOTS | frozenset({"sqlalchemy", "alembic", "psycopg", "pymysql"})
@@ -77,6 +83,7 @@ CLOCK_MODULES = frozenset({"datetime", "date", "time"})
 CLOCK_CALLS = frozenset({"now", "utcnow", "today", "time", "time_ns", "monotonic", "monotonic_ns", "perf_counter"})
 SLEEP_MODULES = frozenset({"time", "asyncio"})
 INNER_LAYERS = frozenset({"domain", "ports", "application"})
+ENV_NAMES = frozenset({"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"})
 
 #: Floors on the production scan. A scan that saw nothing reports a clean tree it never
 #: read. Hand-written.
@@ -96,6 +103,7 @@ EXPECTED_OFFENDERS = {
     "c7_domain_imports_application": 7,
     "c8_domain_reads_clock": 8,
     "c9_application_sleeps": 9,
+    "c10_reads_environment": 10,
 }
 
 
@@ -168,6 +176,87 @@ def _sleeps(call: ast.Call) -> bool:
     )
 
 
+#: Modules that expose the process environment under the same names as `os`.
+ENV_MODULES = frozenset({"os", "posix", "nt"})
+#: `os.path` functions that read the environment to expand their argument.
+ENV_PATH_NAMES = frozenset({"expandvars", "expanduser"})
+
+
+def _os_aliases(tree: ast.AST) -> set[str]:
+    """Every name bound to the `os` module (or `posix`/`nt`): `import os`, `import os as
+    anything`, and `import os.path`, which binds `os` too."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            root = alias.name.split(".", 1)[0]
+            if root not in ENV_MODULES:
+                continue
+            if alias.asname is None:
+                names.add(root)
+            elif alias.name == root:
+                names.add(alias.asname)
+    return names
+
+
+#: Modules that are `os.path` under another name.
+PATH_MODULES = frozenset({"posixpath", "ntpath"})
+
+
+def _path_aliases(tree: ast.AST) -> set[str]:
+    """Every name bound to `os.path` itself: `import os.path as p`, `from os import path
+    [as p]`, `import posixpath`/`ntpath` (under any alias)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os.path" and alias.asname:
+                    names.add(alias.asname)
+                elif alias.name in PATH_MODULES:
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0:
+            names.update(alias.asname or alias.name for alias in node.names if alias.name == "path")
+    return names
+
+
+def _reads_environment(node: ast.AST, os_names: set[str], path_names: frozenset[str] = frozenset()) -> str | None:
+    """`os.environ`, `os.getenv(...)` (under any alias of `os`) and the same names imported
+    from `os`; `request.environ` is not the process's."""
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id in os_names
+    ):
+        return f"{node.value.id}.{node.attr}"
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_PATH_NAMES
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "path"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id in os_names
+    ):
+        return f"{node.value.value.id}.path.{node.attr}"
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_PATH_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id in path_names
+    ):
+        return f"{node.value.id}.{node.attr}"
+    if isinstance(node, ast.ImportFrom) and node.module in ENV_MODULES and node.level == 0:
+        names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES | {"*"})
+        if names:
+            return f"from {node.module} import {', '.join(names)}"
+    if isinstance(node, ast.ImportFrom) and node.module in {"os.path"} | PATH_MODULES and node.level == 0:
+        names = sorted(alias.name for alias in node.names if alias.name in ENV_PATH_NAMES | {"*"})
+        if names:
+            return f"from {node.module} import {', '.join(names)}"
+    return None
+
+
 def _adapter_classes(package_root: Path) -> set[str]:
     names: set[str] = set()
     for module in (package_root / "adapters").rglob("*.py"):
@@ -222,6 +311,8 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(7, line, f"{layer} imports {name}, an SDK or ORM")
 
         docstrings = _docstring_nodes(tree)
+        os_names = _os_aliases(tree)
+        path_names = frozenset(_path_aliases(tree))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 if EVENT_TYPE.match(node.value):
@@ -230,6 +321,9 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(8, node.lineno, "domain reads a clock; take `now` as a parameter")
             if layer in INNER_LAYERS and isinstance(node, ast.Call) and _sleeps(node):
                 add(9, node.lineno, f"{layer} blocks the thread itself; take a `Sleep` port")
+            env_read = _reads_environment(node, os_names, path_names)
+            if env_read:
+                add(10, node.lineno, f"reads the environment ({env_read}); take the setting as an argument")
             if isinstance(node, ast.Call) and _call_name(node) == "client":
                 stats.client_constructions += 1
                 if not any(k.arg == "config" for k in node.keywords):

@@ -1,14 +1,24 @@
 """A Lambda handler for an SQS consumer in one decorator.
 
-    from factbus import Event, consumer
-    from factbus.adapters.dynamodb_inbox import DynamoInbox
+    from functools import partial
 
-    @consumer(inbox=DynamoInbox.from_env, types=["order.placed"])
+    from factbus import Event, consumer
+    from factbus.adapters.dynamodb_inbox import build_dynamo_inbox
+
+    settings = load_settings()  # the product's own configuration, read once
+
+    @consumer(
+        inbox=partial(build_dynamo_inbox, table_name=settings.inbox_table,
+                      region_name=settings.region, endpoint_url=settings.endpoint_url),
+        endpoint_url=settings.endpoint_url,
+        types=["order.placed"],
+    )
     def handler(event: Event, tx) -> None:
         tx.put("ledger", {"pk": event.id, "total": event.data["total"]})
 
-`handler` is now the Lambda entry point. `DynamoInbox.from_env` reads the table name from
-`FACTBUS_INBOX_TABLE` (set it from the `consumer` IaC module's `inbox_table_name` output).
+`handler` is now the Lambda entry point. factbus reads no environment: the table name
+(the `consumer` IaC module's `inbox_table_name` output), the region and the endpoint
+are arguments from the caller's configuration.
 Per batch it builds (once per container) the inbox and the SQS visibility adapter, then runs the existing `Consumer`: dedupe on the
 event id, version guard when `version_of` is given, the effect and the inbox record in
 one transaction, per-message backoff and `ReportBatchItemFailures`.
@@ -22,13 +32,13 @@ recorded in the inbox and acknowledged without calling the function, so a widene
 cannot run code on facts it was not written for.
 
 The queue URL is derived from the record's `eventSourceARN`, so the function needs no
-queue setting. `FACTBUS_ENDPOINT_URL`, else `AWS_ENDPOINT_URL` (which LocalStack sets inside
-its Lambda containers), points the SQS client at LocalStack locally.
+queue setting and its region comes from that ARN. `endpoint_url` points the SQS client at
+LocalStack locally (LocalStack sets `AWS_ENDPOINT_URL` inside its Lambda containers, which
+the caller passes on); it stays None in AWS.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -77,6 +87,7 @@ def consumer(
     visibility: Callable[[str], VisibilityChanger] | None = None,
     service: str = "consumer",
     max_event_age: timedelta = DEFAULT_MAX_EVENT_AGE,
+    endpoint_url: str | None = None,
 ) -> Callable[[Handler], Callable[[Mapping[str, Any], Any], dict[str, list[dict[str, str]]]]]:
     """Wrap `fn(event, tx)` as an SQS-triggered Lambda handler.
 
@@ -84,7 +95,8 @@ def consumer(
     client is built at import time. `visibility` builds the visibility adapter from a
     queue ARN (tests inject a double); by default it is derived from the record.
     `max_event_age` refuses older events before the inbox is read (keep it below the
-    inbox's retention; see `factbus.application.consume`).
+    inbox's retention; see `factbus.application.consume`). `endpoint_url` is the SQS
+    endpoint for the default visibility adapter: set locally (LocalStack), None in AWS.
     """
     wanted = frozenset(types) if types is not None else None
 
@@ -109,11 +121,10 @@ def consumer(
             if visibility is not None:
                 changer = visibility(arn)
             else:
-                endpoint = os.environ.get("FACTBUS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL") or None
                 changer = build_sqs_visibility(
-                    queue_url=queue_url_from_arn(arn, endpoint),
+                    queue_url=queue_url_from_arn(arn, endpoint_url),
                     region_name=_region_from_arn(arn),
-                    endpoint_url=endpoint,
+                    endpoint_url=endpoint_url,
                 )
             return Consumer(
                 inbox=the_inbox,

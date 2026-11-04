@@ -29,6 +29,14 @@ EVENTBRIDGE_CLIENT_CONFIG = Config(
     retries={"total_max_attempts": 1, "mode": "standard"},
     connect_timeout=2,
     read_timeout=5,
+    # factbus reads no environment, and neither may its clients: without this, boto3
+    # takes AWS_ENDPOINT_URL (or a config-file endpoint) when `endpoint_url` is None.
+    ignore_configured_endpoint_urls=True,
+    # The same holds for the endpoint variants: AWS_USE_FIPS_ENDPOINT and
+    # AWS_USE_DUALSTACK_ENDPOINT would otherwise pick a different host. A caller that
+    # needs one passes it as `endpoint_url`.
+    use_fips_endpoint=False,
+    use_dualstack_endpoint=False,
 )
 
 _BUS_MISSING_CODES = frozenset({"ResourceNotFoundException"})
@@ -88,6 +96,8 @@ def build_eventbridge_bus(
 ) -> EventBridgeBus:
     """Build the adapter. `endpoint_url` is set locally (LocalStack) and left None in AWS,
     where the Lambda role's credentials and the region select the real bus."""
+    if not region_name:
+        raise ValueError("region_name is required")
     client = (session or boto3.session.Session()).client(
         "events",
         region_name=region_name,

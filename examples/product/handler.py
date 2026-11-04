@@ -11,13 +11,22 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime
+from functools import partial
 
 from factbus import Event, consumer
-from factbus.adapters.dynamodb_inbox import DynamoInbox
+from factbus.adapters.dynamodb_inbox import build_dynamo_inbox
+
+# The function's configuration, read once here: factbus itself reads no environment.
+# Lambda sets AWS_REGION; LocalStack sets AWS_ENDPOINT_URL inside its Lambda containers,
+# and it is unset in AWS.
+_REGION = os.environ["AWS_REGION"]
+_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL") or None
 
 
 @consumer(
-    inbox=DynamoInbox.from_env,
+    inbox=partial(build_dynamo_inbox, table_name=os.environ["FACTBUS_INBOX_TABLE"],
+                  region_name=_REGION, endpoint_url=_ENDPOINT),
+    endpoint_url=_ENDPOINT,
     types=["order.placed"],
     service=os.environ.get("CONSUMER_SERVICE", "order-ledger"),
 )

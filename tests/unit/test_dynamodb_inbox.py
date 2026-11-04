@@ -4,6 +4,7 @@ transaction; the 100-item limit; and the existing `Consumer` driving it end to e
 
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 from datetime import timedelta
@@ -239,25 +240,29 @@ def test_importing_the_dynamodb_inbox_does_not_import_sqlalchemy():
     assert result.returncode == 0, result.stderr
 
 
-def test_from_env_builds_an_inbox_on_the_named_table(client, monkeypatch):
-    monkeypatch.setenv("FACTBUS_INBOX_TABLE", TABLE)
-    monkeypatch.delenv("FACTBUS_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
-    built = DynamoInbox.from_env()
+def test_the_builder_takes_every_setting_as_an_argument(client, monkeypatch):
+    """factbus reads no environment: with the region and table variables unset, the
+    builder still builds on the named table from its arguments alone."""
+    for name in ("FACTBUS_INBOX_TABLE", "AWS_REGION", "AWS_DEFAULT_REGION", "FACTBUS_ENDPOINT_URL", "AWS_ENDPOINT_URL"):
+        monkeypatch.delenv(name, raising=False)
+    built = build_dynamo_inbox(table_name=TABLE, region_name=REGION)
     assert built.table_name == TABLE
+    assert built._client.meta.region_name == REGION
     writer = Writer()
-    assert built.process(_event("env-1"), subject=None, effect=writer) is InboxOutcome.APPLIED
-    assert _effect_items(client) == ["env-1"]
+    assert built.process(_event("arg-1"), subject=None, effect=writer) is InboxOutcome.APPLIED
+    assert _effect_items(client) == ["arg-1"]
 
 
-@pytest.mark.parametrize("missing", ["FACTBUS_INBOX_TABLE", "AWS_REGION"])
-def test_from_env_refuses_a_missing_setting(monkeypatch, missing):
-    monkeypatch.setenv("FACTBUS_INBOX_TABLE", TABLE)
-    monkeypatch.setenv("AWS_REGION", REGION)
-    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-    monkeypatch.delenv(missing)
+@pytest.mark.parametrize("missing", ["table_name", "region_name"])
+def test_the_builder_refuses_a_missing_setting(missing):
+    settings = {"table_name": TABLE, "region_name": REGION, missing: ""}
     with pytest.raises(ValueError, match=missing):
-        DynamoInbox.from_env()
+        build_dynamo_inbox(**settings)
+
+
+def test_the_builder_passes_the_endpoint_through():
+    built = build_dynamo_inbox(table_name=TABLE, region_name=REGION, endpoint_url="http://localhost:4576")
+    assert built._client.meta.endpoint_url == "http://localhost:4576"
 
 
 def test_an_effect_may_write_json_floats(client, inbox):
@@ -270,3 +275,107 @@ def test_an_effect_may_write_json_floats(client, inbox):
     assert inbox.process(_event("f"), subject=None, effect=effect) is InboxOutcome.APPLIED
     item = client.get_item(TableName=TABLE, Key={"pk": {"S": "fx#f"}, "sk": {"S": "fx"}})["Item"]
     assert item["total"] == {"N": "19.99"} and item["lines"]["L"][0]["M"]["p"] == {"N": "0.1"}
+
+
+def test_no_builder_takes_an_endpoint_from_the_environment(monkeypatch):
+    """boto3 alone would read AWS_ENDPOINT_URL when `endpoint_url` is None (dev-review
+    probe, 3 November). Every factbus client ignores it. Positive control: a plain boto3
+    client built the same way does pick the variable up."""
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+    from factbus.adapters.eventbridge import build_eventbridge_bus
+    from factbus.adapters.sqs_visibility import build_sqs_visibility
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://env-should-be-ignored:1")
+    control = boto3.session.Session().client("dynamodb", region_name=REGION)
+    assert control.meta.endpoint_url == "http://env-should-be-ignored:1"
+
+    clients = [
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+        build_eventbridge_bus(bus_name="b", region_name=REGION)._client,
+        build_sqs_visibility(queue_url="https://sqs.us-east-1.amazonaws.com/1/q", region_name=REGION)._client,
+    ]
+    assert [c.meta.endpoint_url for c in clients] == [
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://events.{REGION}.amazonaws.com",
+        f"https://sqs.{REGION}.amazonaws.com",
+    ]
+
+
+def test_no_builder_takes_an_endpoint_variant_from_the_environment(monkeypatch):
+    """AWS_USE_FIPS_ENDPOINT and AWS_USE_DUALSTACK_ENDPOINT also pick the host in boto3
+    (dev-review round 2, Medium). Every factbus client ignores both. Positive control: a
+    plain boto3 client built the same way moves to the FIPS dual-stack host."""
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+    from factbus.adapters.eventbridge import build_eventbridge_bus
+    from factbus.adapters.sqs_visibility import build_sqs_visibility
+
+    monkeypatch.setenv("AWS_USE_FIPS_ENDPOINT", "true")
+    monkeypatch.setenv("AWS_USE_DUALSTACK_ENDPOINT", "true")
+    control = boto3.session.Session().client("sqs", region_name=REGION)
+    assert control.meta.endpoint_url != f"https://sqs.{REGION}.amazonaws.com"
+    assert "fips" in control.meta.endpoint_url
+
+    clients = [
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+        build_eventbridge_bus(bus_name="b", region_name=REGION)._client,
+        build_sqs_visibility(queue_url="https://sqs.us-east-1.amazonaws.com/1/q", region_name=REGION)._client,
+    ]
+    assert [c.meta.endpoint_url for c in clients] == [
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://dynamodb.{REGION}.amazonaws.com",
+        f"https://events.{REGION}.amazonaws.com",
+        f"https://sqs.{REGION}.amazonaws.com",
+    ]
+
+
+def _first_request_url(client) -> str:
+    """Send one GetItem and capture the URL it would go to, without a network."""
+    from botocore.awsrequest import AWSResponse
+    from urllib3.response import HTTPResponse
+
+    seen: list[str] = []
+
+    def answer(request, **_):
+        seen.append(request.url)
+        raw = HTTPResponse(body=io.BytesIO(b"{}"), status=200, preload_content=False)
+        return AWSResponse(request.url, 200, {}, raw)
+
+    client.meta.events.register("before-send", answer)
+    client.get_item(TableName=TABLE, Key={"pk": {"S": "a"}})
+    return seen[0]
+
+
+def test_dynamodb_clients_ignore_account_id_endpoints(monkeypatch):
+    """F1 review round 3 (Medium): with an account id in the environment, botocore's
+    default `account_id_endpoint_mode` sends DynamoDB calls to `<account>.ddb...`.
+    factbus's clients keep the regional host. Positive control: a plain boto3 client in
+    the same environment does move (only where botocore has account-ID endpoints)."""
+    from botocore.config import Config
+
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+
+    monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    if "account_id_endpoint_mode" in Config.OPTION_DEFAULTS:
+        control = boto3.session.Session().client("dynamodb", region_name=REGION)
+        assert _first_request_url(control).startswith(f"https://123456789012.ddb.{REGION}.")
+
+    for client in (
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+    ):
+        assert _first_request_url(client) == f"https://dynamodb.{REGION}.amazonaws.com/"
+
+
+def test_an_account_id_endpoint_mode_of_required_does_not_reach_factbus(monkeypatch):
+    """`AWS_ACCOUNT_ID_ENDPOINT_MODE=required` with no account id would fail every call."""
+    monkeypatch.setenv("AWS_ACCOUNT_ID_ENDPOINT_MODE", "required")
+    monkeypatch.delenv("AWS_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    client = build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client
+    assert _first_request_url(client) == f"https://dynamodb.{REGION}.amazonaws.com/"
