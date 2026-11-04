@@ -65,8 +65,15 @@ def test_clause_10_sees_through_an_aliased_os_import(tmp_path):
         ('from os import *\n', 1),
         ('from os.path import expandvars\n', 1),
         ('import posix\n\n\ndef region():\n    return posix.environ[b"AWS_REGION"]\n', 5),
+        ('import os.path as osp\n\n\ndef home():\n    return osp.expandvars("$HOME")\n', 5),
+        ('from os import path\n\n\ndef home():\n    return path.expanduser("~")\n', 5),
+        ('from os import path as p2\n\n\ndef home():\n    return p2.expandvars("$HOME")\n', 5),
+        ('import posixpath\n\n\ndef home():\n    return posixpath.expandvars("$HOME")\n', 5),
     ],
-    ids=["import-os.path", "os.path.expanduser", "from-os-star", "from-os.path-expandvars", "posix"],
+    ids=[
+        "import-os.path", "os.path.expanduser", "from-os-star", "from-os.path-expandvars", "posix",
+        "import-os.path-as", "from-os-import-path", "from-os-import-path-as", "posixpath",
+    ],
 )
 def test_clause_10_sees_the_other_ways_to_read_the_environment(tmp_path, source, line):
     """F1 review round 3 (Medium): `import os.path` binds `os`, and the gate missed it.
@@ -84,6 +91,10 @@ def test_clause_10_leaves_os_path_alone_when_it_reads_no_environment(tmp_path):
     package = tmp_path / "src" / "factbus"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "paths.py").write_text('import os.path\n\nJOINED = os.path.join("a", "b")\n', encoding="utf-8")
+    (package / "paths.py").write_text(
+        'import os.path\nimport os.path as osp\nfrom os import path\n\n'
+        'JOINED = (os.path.join("a", "b"), osp.join("a"), path.join("b"))\n',
+        encoding="utf-8",
+    )
     flagged, _ = gate.analyse(tmp_path / "src")
     assert flagged == []

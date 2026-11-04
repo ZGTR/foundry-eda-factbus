@@ -34,7 +34,8 @@ Clauses (a finding names the clause, file and line):
    blocking means.
 10. Any module reads the process environment (`os.environ`, `os.getenv`, `os.putenv`,
    `os.path.expandvars`/`expanduser`, the same names imported from `os` or `os.path`, a
-   star import of either, and `posix`/`nt`, under any alias, `import os.path` included). factbus takes every setting (region, endpoint,
+   star import of either, `posix`/`nt` and `posixpath`/`ntpath`, under any alias,
+   `import os.path [as p]` and `from os import path` included). factbus takes every setting (region, endpoint,
    table names) as an argument, so a service's one typed settings object stays the only
    reader of its environment (notifications design plan, slice F1).
 
@@ -199,7 +200,27 @@ def _os_aliases(tree: ast.AST) -> set[str]:
     return names
 
 
-def _reads_environment(node: ast.AST, os_names: set[str]) -> str | None:
+#: Modules that are `os.path` under another name.
+PATH_MODULES = frozenset({"posixpath", "ntpath"})
+
+
+def _path_aliases(tree: ast.AST) -> set[str]:
+    """Every name bound to `os.path` itself: `import os.path as p`, `from os import path
+    [as p]`, `import posixpath`/`ntpath` (under any alias)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os.path" and alias.asname:
+                    names.add(alias.asname)
+                elif alias.name in PATH_MODULES:
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0:
+            names.update(alias.asname or alias.name for alias in node.names if alias.name == "path")
+    return names
+
+
+def _reads_environment(node: ast.AST, os_names: set[str], path_names: frozenset[str] = frozenset()) -> str | None:
     """`os.environ`, `os.getenv(...)` (under any alias of `os`) and the same names imported
     from `os`; `request.environ` is not the process's."""
     if (
@@ -218,14 +239,21 @@ def _reads_environment(node: ast.AST, os_names: set[str]) -> str | None:
         and node.value.value.id in os_names
     ):
         return f"{node.value.value.id}.path.{node.attr}"
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_PATH_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id in path_names
+    ):
+        return f"{node.value.id}.{node.attr}"
     if isinstance(node, ast.ImportFrom) and node.module in ENV_MODULES and node.level == 0:
         names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES | {"*"})
         if names:
             return f"from {node.module} import {', '.join(names)}"
-    if isinstance(node, ast.ImportFrom) and node.module == "os.path" and node.level == 0:
+    if isinstance(node, ast.ImportFrom) and node.module in {"os.path"} | PATH_MODULES and node.level == 0:
         names = sorted(alias.name for alias in node.names if alias.name in ENV_PATH_NAMES | {"*"})
         if names:
-            return f"from os.path import {', '.join(names)}"
+            return f"from {node.module} import {', '.join(names)}"
     return None
 
 
@@ -284,6 +312,7 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
 
         docstrings = _docstring_nodes(tree)
         os_names = _os_aliases(tree)
+        path_names = frozenset(_path_aliases(tree))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 if EVENT_TYPE.match(node.value):
@@ -292,7 +321,7 @@ def analyse(source_root: Path, *, disabled: frozenset[int] = frozenset()) -> tup
                 add(8, node.lineno, "domain reads a clock; take `now` as a parameter")
             if layer in INNER_LAYERS and isinstance(node, ast.Call) and _sleeps(node):
                 add(9, node.lineno, f"{layer} blocks the thread itself; take a `Sleep` port")
-            env_read = _reads_environment(node, os_names)
+            env_read = _reads_environment(node, os_names, path_names)
             if env_read:
                 add(10, node.lineno, f"reads the environment ({env_read}); take the setting as an argument")
             if isinstance(node, ast.Call) and _call_name(node) == "client":

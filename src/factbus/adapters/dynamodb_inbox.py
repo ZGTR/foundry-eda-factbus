@@ -81,20 +81,21 @@ DEFAULT_INBOX_RETENTION = timedelta(days=35)
 INBOX_SORT_KEY = "inbox"
 VERSION_SORT_KEY = "version"
 
-#: Three attempts. An SDK re-send of a transaction that committed but whose response
-#: was lost cancels on the inbox condition and reads as DUPLICATE: the effect still
-#: committed exactly once, so the re-send cannot duplicate anything.
-#: botocore 1.37 added account-ID endpoints for DynamoDB: with an account id in the
-#: environment, a profile or the container credentials, the default mode
-#: (`preferred`, overridable by AWS_ACCOUNT_ID_ENDPOINT_MODE) sends requests to
-#: `<account>.ddb.<region>.amazonaws.com`, and `required` with no account id fails every
-#: call. factbus turns it off where botocore has it; an older botocore has no such host.
+#: botocore 1.37 added account-ID endpoints for DynamoDB (measured: botocore 1.36.26
+#: lacks the option, the 1.37 line has it): with an account id in the environment, a
+#: profile or the container credentials, the default mode (`preferred`, overridable by
+#: AWS_ACCOUNT_ID_ENDPOINT_MODE) sends requests to `<account>.ddb.<region>.amazonaws.com`,
+#: and `required` with no account id fails every call. factbus turns it off where
+#: botocore has it; an older botocore has no such host.
 _NO_ACCOUNT_ID_ENDPOINT = (
     {"account_id_endpoint_mode": "disabled"}
     if "account_id_endpoint_mode" in Config.OPTION_DEFAULTS
     else {}
 )
 
+#: Three attempts. An SDK re-send of a transaction that committed but whose response
+#: was lost cancels on the inbox condition and reads as DUPLICATE: the effect still
+#: committed exactly once, so the re-send cannot duplicate anything.
 DYNAMODB_CLIENT_CONFIG = Config(
     **_NO_ACCOUNT_ID_ENDPOINT,
     retries={"total_max_attempts": 3, "mode": "standard"},
