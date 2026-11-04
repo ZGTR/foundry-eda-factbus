@@ -68,6 +68,8 @@ def build_sqs_visibility(
     """Build the adapter. `endpoint_url` is set locally (LocalStack) and left None in AWS,
     where the function role's credentials and the region select the real queue. The
     queue URL comes from service config (the IaC module outputs it)."""
+    if not region_name:
+        raise ValueError("region_name is required")
     client = (session or boto3.session.Session()).client(
         "sqs",
         region_name=region_name,

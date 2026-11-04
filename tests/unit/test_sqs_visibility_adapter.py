@@ -49,3 +49,15 @@ def test_client_is_built_with_an_explicit_two_attempt_policy():
 def test_queue_url_is_required():
     with pytest.raises(ValueError):
         SqsVisibility(object(), "")
+
+
+@pytest.mark.parametrize("region_name", [None, ""])
+def test_region_is_required(monkeypatch, region_name):
+    """F1 review round 3 (Low): a missing region must not fall back to AWS_DEFAULT_REGION."""
+    from factbus.adapters.eventbridge import build_eventbridge_bus
+
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-south-1")
+    with pytest.raises(ValueError, match="region_name"):
+        build_sqs_visibility(queue_url="https://sqs.us-east-1.amazonaws.com/1/q", region_name=region_name)
+    with pytest.raises(ValueError, match="region_name"):
+        build_eventbridge_bus(bus_name="b", region_name=region_name)

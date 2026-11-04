@@ -33,7 +33,8 @@ Clauses (a finding names the clause, file and line):
    test runs a paced batch without waiting and the composition root decides what
    blocking means.
 10. Any module reads the process environment (`os.environ`, `os.getenv`, `os.putenv`,
-   or the same names imported from `os`). factbus takes every setting (region, endpoint,
+   `os.path.expandvars`/`expanduser`, the same names imported from `os` or `os.path`, a
+   star import of either, and `posix`/`nt`, under any alias, `import os.path` included). factbus takes every setting (region, endpoint,
    table names) as an argument, so a service's one typed settings object stays the only
    reader of its environment (notifications design plan, slice F1).
 
@@ -174,15 +175,28 @@ def _sleeps(call: ast.Call) -> bool:
     )
 
 
+#: Modules that expose the process environment under the same names as `os`.
+ENV_MODULES = frozenset({"os", "posix", "nt"})
+#: `os.path` functions that read the environment to expand their argument.
+ENV_PATH_NAMES = frozenset({"expandvars", "expanduser"})
+
+
 def _os_aliases(tree: ast.AST) -> set[str]:
-    """Every name bound to the `os` module: `import os`, `import os as anything`."""
-    return {
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-        if alias.name == "os"
-    }
+    """Every name bound to the `os` module (or `posix`/`nt`): `import os`, `import os as
+    anything`, and `import os.path`, which binds `os` too."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            root = alias.name.split(".", 1)[0]
+            if root not in ENV_MODULES:
+                continue
+            if alias.asname is None:
+                names.add(root)
+            elif alias.name == root:
+                names.add(alias.asname)
+    return names
 
 
 def _reads_environment(node: ast.AST, os_names: set[str]) -> str | None:
@@ -195,10 +209,23 @@ def _reads_environment(node: ast.AST, os_names: set[str]) -> str | None:
         and node.value.id in os_names
     ):
         return f"{node.value.id}.{node.attr}"
-    if isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0:
-        names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES)
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ENV_PATH_NAMES
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "path"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id in os_names
+    ):
+        return f"{node.value.value.id}.path.{node.attr}"
+    if isinstance(node, ast.ImportFrom) and node.module in ENV_MODULES and node.level == 0:
+        names = sorted(alias.name for alias in node.names if alias.name in ENV_NAMES | {"*"})
         if names:
-            return f"from os import {', '.join(names)}"
+            return f"from {node.module} import {', '.join(names)}"
+    if isinstance(node, ast.ImportFrom) and node.module == "os.path" and node.level == 0:
+        names = sorted(alias.name for alias in node.names if alias.name in ENV_PATH_NAMES | {"*"})
+        if names:
+            return f"from os.path import {', '.join(names)}"
     return None
 
 

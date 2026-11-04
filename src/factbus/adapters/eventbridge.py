@@ -96,6 +96,8 @@ def build_eventbridge_bus(
 ) -> EventBridgeBus:
     """Build the adapter. `endpoint_url` is set locally (LocalStack) and left None in AWS,
     where the Lambda role's credentials and the region select the real bus."""
+    if not region_name:
+        raise ValueError("region_name is required")
     client = (session or boto3.session.Session()).client(
         "events",
         region_name=region_name,

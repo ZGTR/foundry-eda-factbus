@@ -4,6 +4,7 @@ transaction; the 100-item limit; and the existing `Consumer` driving it end to e
 
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 from datetime import timedelta
@@ -328,3 +329,53 @@ def test_no_builder_takes_an_endpoint_variant_from_the_environment(monkeypatch):
         f"https://events.{REGION}.amazonaws.com",
         f"https://sqs.{REGION}.amazonaws.com",
     ]
+
+
+def _first_request_url(client) -> str:
+    """Send one GetItem and capture the URL it would go to, without a network."""
+    from botocore.awsrequest import AWSResponse
+    from urllib3.response import HTTPResponse
+
+    seen: list[str] = []
+
+    def answer(request, **_):
+        seen.append(request.url)
+        raw = HTTPResponse(body=io.BytesIO(b"{}"), status=200, preload_content=False)
+        return AWSResponse(request.url, 200, {}, raw)
+
+    client.meta.events.register("before-send", answer)
+    client.get_item(TableName=TABLE, Key={"pk": {"S": "a"}})
+    return seen[0]
+
+
+def test_dynamodb_clients_ignore_account_id_endpoints(monkeypatch):
+    """F1 review round 3 (Medium): with an account id in the environment, botocore's
+    default `account_id_endpoint_mode` sends DynamoDB calls to `<account>.ddb...`.
+    factbus's clients keep the regional host. Positive control: a plain boto3 client in
+    the same environment does move (only where botocore has account-ID endpoints)."""
+    from botocore.config import Config
+
+    from factbus.adapters.dynamodb_claims import build_dynamo_claim_store
+
+    monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    if "account_id_endpoint_mode" in Config.OPTION_DEFAULTS:
+        control = boto3.session.Session().client("dynamodb", region_name=REGION)
+        assert _first_request_url(control).startswith(f"https://123456789012.ddb.{REGION}.")
+
+    for client in (
+        build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client,
+        build_dynamo_claim_store(table_name=TABLE, region_name=REGION)._client,
+    ):
+        assert _first_request_url(client) == f"https://dynamodb.{REGION}.amazonaws.com/"
+
+
+def test_an_account_id_endpoint_mode_of_required_does_not_reach_factbus(monkeypatch):
+    """`AWS_ACCOUNT_ID_ENDPOINT_MODE=required` with no account id would fail every call."""
+    monkeypatch.setenv("AWS_ACCOUNT_ID_ENDPOINT_MODE", "required")
+    monkeypatch.delenv("AWS_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    client = build_dynamo_inbox(table_name=TABLE, region_name=REGION)._client
+    assert _first_request_url(client) == f"https://dynamodb.{REGION}.amazonaws.com/"
