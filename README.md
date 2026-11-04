@@ -1,9 +1,9 @@
-# Shared Events (factbus)
+# foundry-eda-factbus
 
-`ZGTR/mshaker-shared-events` is the repository; `factbus` is the Python package it ships
-(`pip install "factbus @ git+https://github.com/ZGTR/mshaker-shared-events.git@<sha>"`,
-`import factbus`). The repository was named `factbus` until October 2026; GitHub
-redirects the old URL.
+`ZGTR/foundry-eda-factbus` is the repository; `factbus` is the Python package it ships
+(`pip install "factbus @ git+https://github.com/ZGTR/foundry-eda-factbus.git@<sha>"`,
+`import factbus`). Formerly `factbus` (until October 2026), then `mshaker-shared-events`
+and `mshaker-foundry-eda-factbus`; GitHub redirects the old URLs.
 
 Event-driven services on AWS without building the plumbing. A producer publishes facts
 from its own database transaction. Each consumer applies every event exactly once. A
@@ -36,12 +36,12 @@ failing. Both alarm.
 
 ```hcl
 module "bus" {
-  source = "github.com/ZGTR/mshaker-shared-events//iac/modules/bus"
+  source = "github.com/ZGTR/foundry-eda-factbus//iac/modules/bus"
   name   = "events"
 }
 
 module "ledger" {                       # one block per consumer
-  source       = "github.com/ZGTR/mshaker-shared-events//iac/modules/consumer"
+  source       = "github.com/ZGTR/foundry-eda-factbus//iac/modules/consumer"
   name         = "ledger"
   bus_name     = module.bus.bus_name
   sources      = ["shop.orders"]
@@ -165,7 +165,7 @@ product's own IaC and change only what is the product's:
    `<prefix>.orders`) and replace `order.placed` with the product's fact type.
 2. **Pin the modules.** Replace each relative `source` with the git source at a reviewed
    commit, for example
-   `git::https://github.com/ZGTR/mshaker-foundry-eda-factbus.git//iac/modules/consumer?ref=<sha>`.
+   `git::https://github.com/ZGTR/foundry-eda-factbus.git//iac/modules/consumer?ref=<sha>`.
    Pin one sha for all three modules, and vendor the Python package at the same sha.
    Point `factbus_src_dir` at the directory holding that vendored `factbus/` package, so
    the consumer's zip ships it (the default, `../../src`, exists only inside this
@@ -183,7 +183,7 @@ product's own IaC and change only what is the product's:
    that writes through `tx`. Add one `module "consumer_<name>"` block per consumer; each
    gets its own rule, queue, DLQs and inbox.
 6. **Notifications are optional.** A product that also tells people about its facts adds
-   the `notifications` module from `ZGTR/mshaker-foundry-eda-notifications`; the example
+   the `notifications` module from `ZGTR/foundry-eda-notifications`; the example
    leaves it out.
 
 Prove the copy before it reaches an account:

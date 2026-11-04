@@ -14,12 +14,12 @@ endpoints. The same module source therefore serves LocalStack and a real account
 
 ```hcl
 module "bus" {
-  source = "github.com/ZGTR/mshaker-shared-events//iac/modules/bus"
+  source = "github.com/ZGTR/foundry-eda-factbus//iac/modules/bus"
   name   = "events"
 }
 
 module "orders_producer" {
-  source               = "github.com/ZGTR/mshaker-shared-events//iac/modules/producer"
+  source               = "github.com/ZGTR/foundry-eda-factbus//iac/modules/producer"
   bus_arn              = module.bus.bus_arn
   event_source         = "shop.orders"
   role_name            = aws_iam_role.orders.name
@@ -27,7 +27,7 @@ module "orders_producer" {
 }
 
 module "ledger" {
-  source          = "github.com/ZGTR/mshaker-shared-events//iac/modules/consumer"
+  source          = "github.com/ZGTR/foundry-eda-factbus//iac/modules/consumer"
   name            = "ledger"
   bus_name        = module.bus.bus_name
   sources         = ["shop.orders"]
