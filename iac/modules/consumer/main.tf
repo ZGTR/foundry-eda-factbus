@@ -49,6 +49,7 @@ resource "aws_cloudwatch_event_rule" "this" {
     },
     { for key, value in { detail = var.detail_pattern } : key => value if value != null },
   ))
+  tags = var.tags
 }
 
 # Two failure boundaries, two DLQs. EventBridge retries a failed put to the queue (a
@@ -82,6 +83,7 @@ resource "aws_cloudwatch_event_rule" "subscription" {
   name           = "${var.name}-${each.key}"
   event_bus_name = each.value.bus_name
   event_pattern  = each.value.event_pattern
+  tags           = var.tags
 
   lifecycle {
     precondition {
@@ -124,6 +126,7 @@ moved {
 resource "aws_sqs_queue" "delivery_dlq" {
   name                      = "${var.name}-delivery-dlq"
   message_retention_seconds = var.retention_seconds
+  tags                      = var.tags
 }
 
 # EventBridge writes the delivery DLQ as the rule, so the grant names the rule (every
@@ -146,12 +149,14 @@ resource "aws_sqs_queue_policy" "delivery_dlq" {
 resource "aws_sqs_queue" "dlq" {
   name                      = "${var.name}-dlq"
   message_retention_seconds = var.retention_seconds
+  tags                      = var.tags
 }
 
 resource "aws_sqs_queue" "this" {
   name                       = var.name
   message_retention_seconds  = var.retention_seconds
   visibility_timeout_seconds = var.function_timeout_seconds * 6
+  tags                       = var.tags
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
@@ -245,6 +250,7 @@ resource "aws_cloudwatch_metric_alarm" "dlq_visible" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
+  tags                = var.tags
 }
 
 resource "aws_cloudwatch_metric_alarm" "delivery_dlq_visible" {
@@ -260,6 +266,7 @@ resource "aws_cloudwatch_metric_alarm" "delivery_dlq_visible" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
+  tags                = var.tags
 }
 
 resource "aws_cloudwatch_metric_alarm" "queue_age" {
@@ -275,6 +282,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_age" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
+  tags                = var.tags
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
@@ -291,6 +299,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
+  tags                = var.tags
 }
 
 # The inbox: one item per applied event, written with a conditional put so a redelivery
@@ -301,6 +310,7 @@ resource "aws_dynamodb_table" "inbox" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
+  tags         = var.tags
 
   attribute {
     name = "pk"

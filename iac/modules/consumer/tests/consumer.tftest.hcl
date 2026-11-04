@@ -645,3 +645,73 @@ run "a_subscription_rule_name_over_64_characters_is_refused" {
   }
   expect_failures = [aws_cloudwatch_event_rule.subscription]
 }
+
+# --- tags ----------------------------------------------------------------------------------
+# Shepherd's notifications queues carry `comms:backoff-waits-seconds`, which its resilience
+# gate reads. `tags` reaches every taggable resource; the default adds none.
+
+run "tags_land_on_every_taggable_resource" {
+  command = plan
+  variables {
+    tags = { "comms:backoff-waits-seconds" = "30,120,600", team = "notifications" }
+  }
+  assert {
+    condition = alltrue([
+      for t in [
+        aws_cloudwatch_event_rule.this[0].tags,
+        aws_sqs_queue.this.tags,
+        aws_sqs_queue.dlq.tags,
+        aws_sqs_queue.delivery_dlq.tags,
+        aws_cloudwatch_metric_alarm.dlq_visible.tags,
+        aws_cloudwatch_metric_alarm.delivery_dlq_visible.tags,
+        aws_cloudwatch_metric_alarm.queue_age.tags,
+        aws_cloudwatch_metric_alarm.lambda_errors[0].tags,
+        aws_dynamodb_table.inbox[0].tags,
+      ] : t == { "comms:backoff-waits-seconds" = "30,120,600", team = "notifications" }
+    ])
+    error_message = "every rule, queue, DLQ, alarm and the inbox table must carry exactly the given tags"
+  }
+}
+
+run "tags_land_on_every_subscription_rule" {
+  command = apply
+  variables {
+    bus_name    = null
+    sources     = null
+    event_types = null
+    subscriptions = [
+      { key = "results", bus_name = "comms-events", event_pattern = jsonencode({ "detail-type" = ["comms.delivery.accepted"] }) },
+      { key = "answers", bus_name = "product-events", event_pattern = jsonencode({ "detail-type" = ["product.action.completed"] }) },
+    ]
+    tags = { "comms:backoff-waits-seconds" = "30,120,600" }
+  }
+  assert {
+    condition = (
+      length(aws_cloudwatch_event_rule.subscription) == 2
+      && alltrue([for r in aws_cloudwatch_event_rule.subscription : r.tags == { "comms:backoff-waits-seconds" = "30,120,600" }])
+      && aws_sqs_queue.this.tags == { "comms:backoff-waits-seconds" = "30,120,600" }
+    )
+    error_message = "with subscriptions, each rule and the queue must carry the given tags"
+  }
+}
+
+# Control for the two runs above: with no `tags`, the same resources carry none.
+run "by_default_no_tag_is_added" {
+  command = plan
+  assert {
+    condition = alltrue([
+      for t in [
+        aws_cloudwatch_event_rule.this[0].tags,
+        aws_sqs_queue.this.tags,
+        aws_sqs_queue.dlq.tags,
+        aws_sqs_queue.delivery_dlq.tags,
+        aws_cloudwatch_metric_alarm.dlq_visible.tags,
+        aws_cloudwatch_metric_alarm.delivery_dlq_visible.tags,
+        aws_cloudwatch_metric_alarm.queue_age.tags,
+        aws_cloudwatch_metric_alarm.lambda_errors[0].tags,
+        aws_dynamodb_table.inbox[0].tags,
+      ] : length(t) == 0
+    ])
+    error_message = "the default tags = {} must add no tag to any resource"
+  }
+}

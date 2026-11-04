@@ -201,3 +201,15 @@ variable "role_name" {
   type        = string
   default     = null
 }
+
+variable "tags" {
+  description = <<-EOT
+    Tags set on every taggable resource this module creates: the rule (or each
+    subscription rule), the queue, its DLQ, the delivery DLQ, the four alarms and the
+    inbox table. Not on the event source mapping, rule targets, queue policies or the
+    inline role policy. A provider's `default_tags` still apply beside these. Empty, the
+    default, adds no tag.
+  EOT
+  type        = map(string)
+  default     = {}
+}

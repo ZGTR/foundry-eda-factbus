@@ -8,7 +8,7 @@ endpoints. The same module source therefore serves LocalStack and a real account
 | --- | --- | --- |
 | `modules/bus` | whoever owns the bus, once per environment | the EventBridge bus and a 30-day archive for replay (capped below the 35-day inbox retention) |
 | `modules/producer` | each producing service | an IAM policy allowing `PutEvents` under the service's own `source` only, plus the 1-minute sweeper schedule |
-| `modules/consumer` | each consuming service | the rule, its target retry policy and delivery DLQ, the queue and its processing DLQ, event source mapping (with `ReportBatchItemFailures`), four alarms, the DynamoDB inbox table and the function's IAM policy |
+| `modules/consumer` | each consuming service | the rule, its target retry policy and delivery DLQ, the queue and its processing DLQ, event source mapping (with `ReportBatchItemFailures`), four alarms, the DynamoDB inbox table and the function's IAM policy; optional `tags` on every taggable one |
 
 ## Smallest calls
 
@@ -78,6 +78,22 @@ Keys are stable names: adding or removing an entry leaves the other rules alone.
 both forms, or neither, is refused at plan. A stack applied before `subscriptions`
 existed keeps its single rule and target (the module carries `moved` blocks to their new
 `[0]` addresses).
+
+`tags` (a map of strings, default `{}`) is set on every taggable resource the consumer
+creates: the rule or each subscription rule, the queue, its DLQ, the delivery DLQ, the
+four alarms and the inbox table. The event source mapping, rule targets, queue policies
+and the inline role policy carry none. A product whose own gates read a queue tag sets it
+here, for example Shepherd's notifications queues:
+
+```hcl
+module "core_results" {
+  # ... as above ...
+  tags = { "comms:backoff-waits-seconds" = "[30,120,600,1800,3600,7200,7200,7200,7200]" }
+}
+```
+
+The default adds no tag, so an existing stack's plan is unchanged. A provider's
+`default_tags` still apply beside these.
 
 ## Local and production
 
