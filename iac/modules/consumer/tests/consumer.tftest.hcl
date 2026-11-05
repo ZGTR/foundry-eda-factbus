@@ -667,7 +667,7 @@ run "tags_land_on_every_taggable_resource" {
         aws_cloudwatch_metric_alarm.queue_age.tags,
         aws_cloudwatch_metric_alarm.lambda_errors[0].tags,
         aws_dynamodb_table.inbox[0].tags,
-      ] : t == { "comms:backoff-waits-seconds" = "30,120,600", team = "notifications" }
+      ] : t == tomap({ "comms:backoff-waits-seconds" = "30,120,600", team = "notifications" })
     ])
     error_message = "every rule, queue, DLQ, alarm and the inbox table must carry exactly the given tags"
   }
@@ -688,8 +688,8 @@ run "tags_land_on_every_subscription_rule" {
   assert {
     condition = (
       length(aws_cloudwatch_event_rule.subscription) == 2
-      && alltrue([for r in aws_cloudwatch_event_rule.subscription : r.tags == { "comms:backoff-waits-seconds" = "30,120,600" }])
-      && aws_sqs_queue.this.tags == { "comms:backoff-waits-seconds" = "30,120,600" }
+      && alltrue([for r in aws_cloudwatch_event_rule.subscription : r.tags == tomap({ "comms:backoff-waits-seconds" = "30,120,600" })])
+      && aws_sqs_queue.this.tags == tomap({ "comms:backoff-waits-seconds" = "30,120,600" })
     )
     error_message = "with subscriptions, each rule and the queue must carry the given tags"
   }
