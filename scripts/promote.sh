@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # promote.sh: move the release branch (main or master) to a commit already on `develop`, by
 # fast-forward, and only when that commit's TREE passed this repository's release checks.
-# Land-once flow (ZGTR/mshaker-alphazed-workspace docs/plans/2026-11-23-land-once-branch-flow.md):
-# every change lands once, by PR into `develop`; the release branch is a pointer that only this
-# script moves. Releases are OWNER-TRIGGERED (decision D4 = d): run it only when the owner says release.
+# Land-once flow (AGENTS.md, "Land once"): every change lands once, by PR into `develop`; the release
+# branch is a pointer that only this script moves. Releases are OWNER-TRIGGERED (decision D4 = d): run it only when the owner says release.
 #
 #   bash scripts/promote.sh [<rev>]             dry run: what would move, and whether a receipt exists
 #   bash scripts/promote.sh [<rev>] --check     run the release checks on <rev> and record a receipt
