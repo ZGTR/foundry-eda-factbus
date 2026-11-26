@@ -31,6 +31,14 @@ python3 scripts/check_eventing_boundaries.py
 set +e; PYTHON=$(uv python find 3.12) bash scripts/test_sqlalchemy_matrix.sh; code=$?; set -e
 [ "$code" = 0 ] || [ "$code" = 3 ] || exit "$code"
 
+# Docker. A machine with the daemon installed but not running (a cloud sandbox) gets it started; Docker Hub
+# images come through a mirror there, because shared egress IPs hit Docker Hub's anonymous rate limit.
+if ! docker info >/dev/null 2>&1 && [ "$(id -u)" = 0 ] && command -v dockerd >/dev/null; then
+  mirror=--registry-mirror=https://mirror.gcr.io
+  grep -qs registry-mirrors /etc/docker/daemon.json && mirror=
+  (dockerd $mirror >/tmp/release-checks-dockerd.log 2>&1 &)
+  for _ in $(seq 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+fi
 docker info >/dev/null 2>&1 || { echo "UNPROVEN: the remaining steps need a Docker daemon"; exit 3; }
 # compose.yaml on free ports under its own project, removed on exit.
 free() { python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])"; }
