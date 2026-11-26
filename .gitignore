@@ -12,3 +12,5 @@ dist/
 .venv-matrix-*/
 examples/hello/.build/
 examples/product/.build/
+.release-venv/
+.release-tools/
