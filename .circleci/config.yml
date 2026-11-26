@@ -1,0 +1,19 @@
+version: 2.1
+
+jobs:
+  verify:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Install uv
+          command: pipx install uv==0.13.5
+      - run:
+          name: Verify the library, IaC modules, and local event delivery
+          command: bash scripts/release-checks.sh
+
+workflows:
+  verify:
+    jobs:
+      - verify
